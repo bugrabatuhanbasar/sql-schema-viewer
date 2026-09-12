@@ -10,10 +10,11 @@ specification.
 
 ## Status
 
-Milestone **M1 — Foundations**. The Swift Package Manager workspace, the
-normalized schema model, the shared lexer/splitter, and the network-guard
-tests are in place. Per-dialect parsers, the diagram renderer, and the
-SwiftUI app come in later milestones.
+Milestone **M2 — PostgreSQL vertical slice**. On top of M1's foundations,
+the PostgreSQL DDL recognizer (`CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`,
+`COMMENT ON`, plus view/routine/trigger headers), the layered layout engine,
+the SwiftUI three-pane document window, and the Core-Graphics diagram canvas
+are now in place. Xcode app setup is documented in [App/README.md](App/README.md).
 
 ## Requirements
 
@@ -60,9 +61,11 @@ Tests/
 
 ## macOS app target
 
-The SwiftUI application shell is added in milestone M2 as an Xcode project
-under `App/MacSQLSchemaViewer.xcodeproj`. It links the SPM package
-`SchemaKit`. Bundle identifier: `org.macsqlschemaviewer.MacSQLSchemaViewer`.
+The SwiftUI application lives under [App/](App/). See
+[App/README.md](App/README.md) for the one-time Xcode project setup steps.
+Bundle identifier: `org.macsqlschemaviewer.MacSQLSchemaViewer`.
+Sandbox is on; only user-selected read/write is granted; no network
+entitlements are ever declared.
 
 ## License
 

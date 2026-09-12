@@ -1,16 +1,16 @@
 import Foundation
 @_exported import SchemaModel
-import ParserCore
+@_exported import ParserCore
+@_exported import LayoutEngine
+@_exported import DiagramRenderer
+@_exported import DependencyAnalyzer
 import PostgresParser
 import MySQLParser
 import SQLiteParser
 import OracleParser
 import DBMLParser
 import DialectDetector
-import DependencyAnalyzer
 import QualityChecks
-import LayoutEngine
-import DiagramRenderer
 import MermaidExporter
 
 /// The umbrella API consumed by both the SwiftUI app and the CLI. Any
