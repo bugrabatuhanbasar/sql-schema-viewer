@@ -10,7 +10,7 @@ specification.
 
 ## Status
 
-Milestone **M4 — SQLite parser** (M3 also complete). On top of M1's
+Milestone **M5 — Oracle parser** (M1–M4 also complete). On top of M1's
 foundations and M2's PostgreSQL vertical slice + SwiftUI app, the MySQL /
 MariaDB parser is now in place (`CREATE TABLE` with backticks, engine
 trailers, `AUTO_INCREMENT`, table/column FKs; `ALTER TABLE`; `CREATE

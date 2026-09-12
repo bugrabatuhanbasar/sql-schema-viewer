@@ -43,6 +43,7 @@ public struct LexerConfig: Sendable {
         "SCHEMA", "USING", "WITH", "TEMP", "TEMPORARY", "UNLOGGED",
         "INSERT", "UPDATE", "DELETE", "TRUNCATE", "BEFORE", "AFTER",
         "INSTEAD", "OF", "FOR", "EACH", "ROW", "STATEMENT",
+        "ADD", "COLUMN", "CASCADE", "RESTRICT", "ACTION", "IS", "SET",
     ]
 
     public static let postgres = LexerConfig(
