@@ -65,6 +65,8 @@ let package = Package(
         .testTarget(name: "SQLLexerTests", dependencies: ["SQLLexer", "SchemaModel"]),
         .testTarget(name: "ParserCoreTests", dependencies: ["ParserCore", "SchemaModel", "SQLLexer"]),
         .testTarget(name: "PostgresParserTests", dependencies: ["PostgresParser", "SchemaModel"]),
+        .testTarget(name: "MySQLParserTests", dependencies: ["MySQLParser", "SchemaModel"]),
+        .testTarget(name: "DialectDetectorTests", dependencies: ["DialectDetector", "SchemaModel"]),
         .testTarget(name: "LayoutEngineTests", dependencies: ["LayoutEngine", "SchemaModel"]),
         .testTarget(name: "NetworkGuardTests", dependencies: ["SchemaKit"]),
     ]

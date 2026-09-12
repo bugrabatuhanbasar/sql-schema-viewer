@@ -10,11 +10,14 @@ specification.
 
 ## Status
 
-Milestone **M2 — PostgreSQL vertical slice**. On top of M1's foundations,
-the PostgreSQL DDL recognizer (`CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`,
-`COMMENT ON`, plus view/routine/trigger headers), the layered layout engine,
-the SwiftUI three-pane document window, and the Core-Graphics diagram canvas
-are now in place. Xcode app setup is documented in [App/README.md](App/README.md).
+Milestone **M3 — Fault tolerance + MySQL/MariaDB**. On top of M1's
+foundations and M2's PostgreSQL vertical slice + SwiftUI app, the MySQL /
+MariaDB parser is now in place (`CREATE TABLE` with backticks, engine
+trailers, `AUTO_INCREMENT`, table/column FKs; `ALTER TABLE`; `CREATE
+INDEX`; view/trigger/routine headers), plus an expanded dialect detector
+and its unit tests. Fault-tolerant parsing is formalized: one malformed
+statement never discards the rest of the file. Xcode app setup is
+documented in [App/README.md](App/README.md).
 
 ## Requirements
 
