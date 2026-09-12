@@ -1,0 +1,9 @@
+Mac SQL Schema Viewer
+Copyright 2026 Mac SQL Schema Viewer contributors
+
+This product includes software developed by the Mac SQL Schema Viewer project.
+
+Third-party components:
+
+- swift-argument-parser (Apache-2.0)
+  https://github.com/apple/swift-argument-parser
