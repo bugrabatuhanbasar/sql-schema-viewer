@@ -111,16 +111,36 @@ final class DiagramCanvasNSView: NSView {
             ? CGColor(gray: 0.70, alpha: 0.85)
             : CGColor(gray: 0.30, alpha: 0.85)
         ctx.setStrokeColor(edgeColor)
+        // Bounds of ALL live rects — long-span edges use these to detour
+        // around the diagram instead of crossing intermediate tables.
+        let allRects = scene.nodes.compactMap { liveRect(forTitle: $0.title) }
+        let bx0 = allRects.map(\.minX).min() ?? 0
+        let bx1 = allRects.map(\.maxX).max() ?? 0
         for edge in scene.edges {
             guard let fromRect = liveRect(forTitle: edge.fromTitle),
                   let toRect = liveRect(forTitle: edge.toTitle) else { continue }
             let a = borderPoint(from: fromRect, toward: (toRect.midX, toRect.midY))
             let b = borderPoint(from: toRect, toward: (fromRect.midX, fromRect.midY))
-            let midX = (a.x + b.x) / 2
+
+            let c1: CGPoint, c2: CGPoint
+            if edge.isLongSpan {
+                // Detour: route control points OUTSIDE the diagram bounds on
+                // the side closer to both endpoints. This makes the bezier
+                // sweep around the intermediate tables.
+                let bothLeftHalf = (a.x + b.x) / 2 < (bx0 + bx1) / 2
+                let detourX: CGFloat = bothLeftHalf ? (bx0 - 60) : (bx1 + 60)
+                c1 = CGPoint(x: detourX, y: a.y)
+                c2 = CGPoint(x: detourX, y: b.y)
+            } else {
+                let midX = (a.x + b.x) / 2
+                c1 = CGPoint(x: midX, y: a.y)
+                c2 = CGPoint(x: midX, y: b.y)
+            }
             ctx.beginPath()
             ctx.move(to: a)
-            ctx.addCurve(to: b, control1: CGPoint(x: midX, y: a.y), control2: CGPoint(x: midX, y: b.y))
+            ctx.addCurve(to: b, control1: c1, control2: c2)
             ctx.strokePath()
+
             // Cardinality label — 18pt OUTSIDE the node border, along the edge.
             let dx = b.x - a.x, dy = b.y - a.y
             let len = max(1, sqrt(dx * dx + dy * dy))

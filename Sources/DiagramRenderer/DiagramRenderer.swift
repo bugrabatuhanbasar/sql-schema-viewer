@@ -34,16 +34,23 @@ public struct DiagramScene: Sendable {
         public var toRect: Rect
         public var fromCardinality: String
         public var toCardinality: String
+        /// True when the straight line between source and target passes
+        /// through another node's bounding box — renderers detour long
+        /// edges around the diagram so they don't slice through unrelated
+        /// tables.
+        public var isLongSpan: Bool
         public init(
             fromTitle: String, toTitle: String,
             fromRect: Rect, toRect: Rect,
             fromCardinality: String = "N",
-            toCardinality: String = "1"
+            toCardinality: String = "1",
+            isLongSpan: Bool = false
         ) {
             self.fromTitle = fromTitle; self.toTitle = toTitle
             self.fromRect = fromRect; self.toRect = toRect
             self.fromCardinality = fromCardinality
             self.toCardinality = toCardinality
+            self.isLongSpan = isLongSpan
         }
     }
     public var nodes: [NodeShape]
@@ -70,17 +77,64 @@ public enum DiagramRenderer {
                 guard let fromRect = rectByName[table.name],
                       let toRect = rectByName[fk.referencedTable] else { continue }
                 let (fromCard, toCard) = cardinality(for: fk, in: table)
+                let long = edgeCrossesAnyOtherNode(
+                    from: fromRect, to: toRect,
+                    excluding: [table.name.raw, fk.referencedTable.raw],
+                    nodes: nodes
+                )
                 edges.append(DiagramScene.EdgeShape(
                     fromTitle: table.name.raw,
                     toTitle: fk.referencedTable.raw,
                     fromRect: fromRect,
                     toRect: toRect,
                     fromCardinality: fromCard,
-                    toCardinality: toCard
+                    toCardinality: toCard,
+                    isLongSpan: long
                 ))
             }
         }
         return DiagramScene(nodes: nodes, edges: edges)
+    }
+
+    /// Returns true when the straight segment from the source rect center
+    /// to the target rect center passes through the bounding box of any
+    /// other node.
+    private static func edgeCrossesAnyOtherNode(
+        from: DiagramScene.Rect,
+        to: DiagramScene.Rect,
+        excluding titles: Set<String>,
+        nodes: [DiagramScene.NodeShape]
+    ) -> Bool {
+        let ax = from.midX, ay = from.midY
+        let bx = to.midX, by = to.midY
+        for node in nodes where !titles.contains(node.title) {
+            if segmentIntersectsRect(ax: ax, ay: ay, bx: bx, by: by, rect: node.rect) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func segmentIntersectsRect(ax: Double, ay: Double, bx: Double, by: Double, rect: DiagramScene.Rect) -> Bool {
+        // Liang–Barsky clipping — returns true if the segment intersects the
+        // (padded) rectangle.
+        let pad: Double = 4
+        let xmin = rect.x - pad, xmax = rect.x + rect.width + pad
+        let ymin = rect.y - pad, ymax = rect.y + rect.height + pad
+        var t0 = 0.0, t1 = 1.0
+        let dx = bx - ax, dy = by - ay
+        let p = [-dx, dx, -dy, dy]
+        let q = [ax - xmin, xmax - ax, ay - ymin, ymax - ay]
+        for i in 0..<4 {
+            if p[i] == 0 {
+                if q[i] < 0 { return false }
+            } else {
+                let t = q[i] / p[i]
+                if p[i] < 0 { if t > t1 { return false }; if t > t0 { t0 = t } }
+                else { if t < t0 { return false }; if t < t1 { t1 = t } }
+            }
+        }
+        return true
     }
 
     private static func cardinality(for fk: ForeignKeySpec, in owner: Table) -> (String, String) {

@@ -94,70 +94,100 @@ public enum LayoutEngine {
         // to the horizontal position of their parents, so an edge from A
         // (layer N) to B (layer N+1) tends to run near-straight instead of
         // sweeping across other nodes on the way down.
+        // Build per-layer ordering + geometry. Positions are assigned as we
+        // go, so each layer's node targets the barycenter of its parents'
+        // *actual* x positions in previous layers — a lightweight Sugiyama
+        // coordinate-assignment. Overlap is prevented by sweeping left to
+        // right with a minimum step of nodeWidth + horizontalGap.
         var perLayerIds: [[Identifier]] = []
         var perLayerHeights: [[Double]] = []
-        var perLayerWidth: [Double] = []
-        var indexByName: [Identifier: Int] = [:]
+        var perLayerXs: [[Double]] = []
+        var xByName: [Identifier: Double] = [:]
+
+        func height(of id: Identifier) -> Double {
+            let cols = schema.tables[id]?.columns.count ?? 0
+            return headerHeight + Double(max(cols, 1)) * rowHeight
+        }
+
         for (li, l) in layers.enumerated() {
             var ids = groups[l]!
+
             if li == 0 {
+                // Root layer: alphabetical, laid out left-to-right from 0.
                 ids.sort { $0.normalized < $1.normalized }
-            } else {
-                ids.sort { a, b in
-                    let am = medianParentIndex(of: a, parents: parents, indexByName: indexByName)
-                    let bm = medianParentIndex(of: b, parents: parents, indexByName: indexByName)
-                    if am == bm { return a.normalized < b.normalized }
-                    return am < bm
-                }
+                var xs: [Double] = []
+                var x: Double = 0
+                for _ in ids { xs.append(x); x += nodeWidth + horizontalGap }
+                for (i, id) in ids.enumerated() { xByName[id] = xs[i] }
+                perLayerIds.append(ids)
+                perLayerHeights.append(ids.map(height))
+                perLayerXs.append(xs)
+                continue
             }
-            for (i, id) in ids.enumerated() { indexByName[id] = i }
-            let heights = ids.map { id -> Double in
-                let cols = schema.tables[id]?.columns.count ?? 0
-                return headerHeight + Double(max(cols, 1)) * rowHeight
+
+            // Later layers: compute each node's target x = barycenter of its
+            // parents' xByName, then pack left-to-right in target order.
+            var targets: [(id: Identifier, target: Double)] = ids.map { id in
+                let pxs = (parents[id] ?? []).compactMap { xByName[$0] }
+                let t = pxs.isEmpty ? .greatestFiniteMagnitude : pxs.reduce(0, +) / Double(pxs.count)
+                return (id, t)
             }
+            // Sort by target, then alphabetical for ties.
+            targets.sort {
+                if $0.target != $1.target { return $0.target < $1.target }
+                return $0.id.normalized < $1.id.normalized
+            }
+            var xs: [Double] = Array(repeating: 0, count: targets.count)
+            var prevRight = -Double.infinity
+            for (i, pair) in targets.enumerated() {
+                let x = max(pair.target, prevRight + horizontalGap)
+                xs[i] = x
+                prevRight = x + nodeWidth
+            }
+            ids = targets.map(\.id)
+            for (i, id) in ids.enumerated() { xByName[id] = xs[i] }
             perLayerIds.append(ids)
-            perLayerHeights.append(heights)
-            let n = Double(ids.count)
-            let w = n * nodeWidth + max(0, n - 1) * horizontalGap
-            perLayerWidth.append(w)
+            perLayerHeights.append(ids.map(height))
+            perLayerXs.append(xs)
         }
-        let maxLayerWidth = perLayerWidth.max() ?? nodeWidth
+
+        // Global left-align so every layer starts at x=0 (avoid negative x
+        // if the barycenter pass pushed a layer left of the roots).
+        let minX = perLayerXs.flatMap { $0 }.min() ?? 0
+        if minX < 0 {
+            let shift = -minX
+            for li in perLayerXs.indices {
+                for i in perLayerXs[li].indices { perLayerXs[li][i] += shift }
+            }
+            for (name, x) in xByName { xByName[name] = x + shift }
+        }
+
+        // Compute overall content width from the rightmost node right edge.
+        var maxRight: Double = 0
+        for li in perLayerXs.indices {
+            for x in perLayerXs[li] { maxRight = max(maxRight, x + nodeWidth) }
+        }
 
         var positions: [NodePosition] = []
         var y: Double = 0
         for (li, ids) in perLayerIds.enumerated() {
             let heights = perLayerHeights[li]
+            let xs = perLayerXs[li]
             let rowHeightMax = heights.max() ?? headerHeight
-            let layerWidth = perLayerWidth[li]
-            var x: Double = (maxLayerWidth - layerWidth) / 2
             for (idx, id) in ids.enumerated() {
                 let h = heights[idx]
-                // Vertically center the row so shorter tables sit on the
-                // same visual center-line as tall ones.
                 let rowY = y + (rowHeightMax - h) / 2
                 positions.append(NodePosition(
-                    node: id, x: x, y: rowY,
+                    node: id, x: xs[idx], y: rowY,
                     width: nodeWidth, height: h
                 ))
-                x += nodeWidth + horizontalGap
             }
             y += rowHeightMax + verticalGap
         }
         return LayoutResult(
             positions: positions,
-            contentSize: (max(maxLayerWidth, nodeWidth), max(y - verticalGap, headerHeight))
+            contentSize: (max(maxRight, nodeWidth), max(y - verticalGap, headerHeight))
         )
     }
-
-    private static func medianParentIndex(
-        of node: Identifier,
-        parents: [Identifier: Set<Identifier>],
-        indexByName: [Identifier: Int]
-    ) -> Double {
-        let ps = (parents[node] ?? []).compactMap { indexByName[$0] }.sorted()
-        if ps.isEmpty { return .greatestFiniteMagnitude }
-        let n = ps.count
-        if n % 2 == 1 { return Double(ps[n / 2]) }
-        return Double(ps[n / 2 - 1] + ps[n / 2]) / 2
-    }
 }
+

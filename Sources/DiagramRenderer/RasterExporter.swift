@@ -67,15 +67,25 @@ public enum RasterExporter {
 
         ctx.setLineWidth(1.3)
         ctx.setStrokeColor(CGColor(gray: 0.35, alpha: 0.7))
+        let bx0 = scene.nodes.map(\.rect.x).min() ?? 0
+        let bx1 = scene.nodes.map { $0.rect.x + $0.rect.width }.max() ?? 0
         for edge in scene.edges {
             let a = edge.fromRect.borderPoint(toward: (edge.toRect.midX, edge.toRect.midY))
             let b = edge.toRect.borderPoint(toward: (edge.fromRect.midX, edge.fromRect.midY))
             let p1 = CGPoint(x: a.x, y: a.y)
             let p2 = CGPoint(x: b.x, y: b.y)
-            let midX = (p1.x + p2.x) / 2
+            let c1x: CGFloat, c2x: CGFloat
+            if edge.isLongSpan {
+                let bothLeft = (p1.x + p2.x) / 2 < (bx0 + bx1) / 2
+                let dx: CGFloat = bothLeft ? bx0 - 60 : bx1 + 60
+                c1x = dx; c2x = dx
+            } else {
+                let m = (p1.x + p2.x) / 2
+                c1x = m; c2x = m
+            }
             ctx.beginPath()
             ctx.move(to: p1)
-            ctx.addCurve(to: p2, control1: CGPoint(x: midX, y: p1.y), control2: CGPoint(x: midX, y: p2.y))
+            ctx.addCurve(to: p2, control1: CGPoint(x: c1x, y: p1.y), control2: CGPoint(x: c2x, y: p2.y))
             ctx.strokePath()
         }
 

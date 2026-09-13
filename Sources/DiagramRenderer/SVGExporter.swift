@@ -20,11 +20,21 @@ public enum SVGExporter {
         out.append(#"<style>text{font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:12px;fill:\#(style.textColor);}</style>"#)
         out.append(#"<rect x="0" y="0" width="100%" height="100%" fill="\#(style.background)"/>"#)
 
+        let bx0 = scene.nodes.map(\.rect.x).min() ?? 0
+        let bx1 = scene.nodes.map { $0.rect.x + $0.rect.width }.max() ?? 0
         for edge in scene.edges {
             let p1 = edge.fromRect.borderPoint(toward: (edge.toRect.midX, edge.toRect.midY))
             let p2 = edge.toRect.borderPoint(toward: (edge.fromRect.midX, edge.fromRect.midY))
-            let mid = (p1.x + p2.x) / 2
-            let path = "M \(p1.x) \(p1.y) C \(mid) \(p1.y) \(mid) \(p2.y) \(p2.x) \(p2.y)"
+            let c1x: Double, c2x: Double
+            if edge.isLongSpan {
+                let bothLeft = (p1.x + p2.x) / 2 < (bx0 + bx1) / 2
+                let dx: Double = bothLeft ? bx0 - 60 : bx1 + 60
+                c1x = dx; c2x = dx
+            } else {
+                let m = (p1.x + p2.x) / 2
+                c1x = m; c2x = m
+            }
+            let path = "M \(p1.x) \(p1.y) C \(c1x) \(p1.y) \(c2x) \(p2.y) \(p2.x) \(p2.y)"
             out.append(#"<path d="\#(path)" fill="none" stroke="\#(style.edgeColor)" stroke-width="1.3"/>"#)
 
             let (fx, fy) = labelPoint(near: p1, opposite: p2, offset: 18)
