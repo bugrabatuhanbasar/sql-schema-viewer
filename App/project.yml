@@ -1,0 +1,39 @@
+name: MacSQLSchemaViewer
+options:
+  bundleIdPrefix: org.macsqlschemaviewer
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+packages:
+  SchemaKit:
+    path: ..
+
+targets:
+  MacSQLSchemaViewer:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Source
+        excludes:
+          - "Info.plist"
+          - "MacSQLSchemaViewer.entitlements"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.macsqlschemaviewer.MacSQLSchemaViewer
+        PRODUCT_NAME: "Mac SQL Schema Viewer"
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_ENTITLEMENTS: Source/MacSQLSchemaViewer.entitlements
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        SWIFT_VERSION: "5.9"
+        ENABLE_HARDENED_RUNTIME: YES
+        INFOPLIST_FILE: Source/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+    dependencies:
+      - package: SchemaKit
+        product: AppUI
