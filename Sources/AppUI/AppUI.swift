@@ -9,12 +9,26 @@ import AppKit
 /// the center, details on the right, diagnostics along the bottom.
 public struct SchemaViewerRootView: SwiftUI.View {
     @ObservedObject var document: SchemaDocument
-    @State private var selectedObject: Identifier?
+    @State private var selectedObjects: Set<Identifier> = []
     @State private var searchText: String = ""
     @State private var showOrphansOnly: Bool = false
 
     public init(document: SchemaDocument) {
         self.document = document
+    }
+
+    /// A single-item view onto `selectedObjects` for the sidebar (which
+    /// uses SwiftUI's `List(selection:)` with single-select semantics).
+    /// Writing to it replaces the whole multi-selection with that one row;
+    /// setting it to `nil` clears the selection.
+    private var sidebarSelectionBinding: Binding<Identifier?> {
+        Binding(
+            get: { selectedObjects.count == 1 ? selectedObjects.first : nil },
+            set: { new in
+                if let new { selectedObjects = [new] }
+                else { selectedObjects.removeAll() }
+            }
+        )
     }
 
     public var body: some SwiftUI.View {
@@ -23,23 +37,23 @@ public struct SchemaViewerRootView: SwiftUI.View {
                 schema: document.schema,
                 search: $searchText,
                 showOrphansOnly: $showOrphansOnly,
-                selected: $selectedObject
+                selected: sidebarSelectionBinding
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 340)
         } content: {
             VStack(spacing: 0) {
                 DiagramCanvasView(
                     scene: scene,
-                    selection: selectedObject,
+                    selection: selectedObjects,
                     highlights: highlights,
-                    onSelect: { selectedObject = $0 }
+                    onSelectionChanged: { selectedObjects = $0 }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 DiagnosticsBar(diagnostics: document.diagnostics, summary: document.schema.summarySentence)
             }
             .navigationSplitViewColumnWidth(min: 560, ideal: 900, max: .infinity)
         } detail: {
-            DetailsPanel(schema: document.schema, selected: selectedObject)
+            DetailsPanel(schema: document.schema, selection: selectedObjects)
                 .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 420)
         }
         .navigationSplitViewStyle(.balanced)
@@ -52,6 +66,13 @@ public struct SchemaViewerRootView: SwiftUI.View {
                     }
                 }
                 .pickerStyle(.menu)
+                Button {
+                    selectedObjects = Set(document.schema.tables.keys)
+                } label: { Label("Select All Tables", systemImage: "square.stack.3d.up") }
+                Button {
+                    selectedObjects.removeAll()
+                } label: { Label("Deselect", systemImage: "xmark.circle") }
+                .disabled(selectedObjects.isEmpty)
                 Button {
                     document.analyze()
                 } label: { Label("Refresh", systemImage: "arrow.clockwise") }
@@ -71,12 +92,20 @@ public struct SchemaViewerRootView: SwiftUI.View {
         return DiagramRenderer.buildScene(document.schema, layout: layout)
     }
 
+    /// The full "related" set for the selection: every selected table + all
+    /// tables it references (out-edges) + all tables that reference it
+    /// (in-edges). Used to tint neighbour nodes so the picked slice of the
+    /// diagram stands out.
     private var highlights: Set<Identifier> {
-        guard let sel = selectedObject, let t = document.schema.tables[sel] else { return [] }
-        var out: Set<Identifier> = [sel]
-        for fk in t.foreignKeys { out.insert(fk.referencedTable) }
-        for (_, other) in document.schema.tables where other.foreignKeys.contains(where: { $0.referencedTable == sel }) {
-            out.insert(other.name)
+        var out: Set<Identifier> = selectedObjects
+        for sel in selectedObjects {
+            guard let t = document.schema.tables[sel] else { continue }
+            for fk in t.foreignKeys { out.insert(fk.referencedTable) }
+        }
+        for (_, other) in document.schema.tables {
+            if other.foreignKeys.contains(where: { selectedObjects.contains($0.referencedTable) }) {
+                out.insert(other.name)
+            }
         }
         return out
     }
@@ -165,14 +194,19 @@ struct ObjectListView: SwiftUI.View {
     }
 }
 
-/// Right sidebar: details of the selected object.
+/// Right sidebar: details of the selection. A single selected object gets
+/// its full detail card; a multi-selection collapses into a summary card
+/// with counts (columns / FKs / indexes / relationships) across the picked
+/// tables — useful when you're dragging a group around.
 struct DetailsPanel: SwiftUI.View {
     let schema: Schema
-    let selected: Identifier?
+    let selection: Set<Identifier>
 
     var body: some SwiftUI.View {
         ScrollView {
-            if let selected {
+            if selection.count > 1 {
+                multiSelectionSummary()
+            } else if let selected = selection.first {
                 if let t = schema.tables[selected] {
                     tableDetails(t)
                 } else if let v = schema.views[selected] {
@@ -188,6 +222,36 @@ struct DetailsPanel: SwiftUI.View {
                 Text("Select an object").foregroundStyle(.secondary).padding()
             }
         }
+    }
+
+    private func multiSelectionSummary() -> some SwiftUI.View {
+        let picked = selection.compactMap { schema.tables[$0] }
+        let colCount   = picked.reduce(0) { $0 + $1.columns.count }
+        let fkCount    = picked.reduce(0) { $0 + $1.foreignKeys.count }
+        let idxCount   = picked.reduce(0) { $0 + $1.indexes.count }
+        let names = picked.map(\.name.raw).sorted()
+        return VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading) {
+                Text("\(selection.count) tables selected").font(.title2).bold()
+                Text("Drag any selected table to move the whole group.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Totals").font(.headline)
+                HStack { Text("Columns:"); Spacer(); Text("\(colCount)").font(.body.monospacedDigit()) }
+                HStack { Text("Foreign keys:"); Spacer(); Text("\(fkCount)").font(.body.monospacedDigit()) }
+                HStack { Text("Indexes:"); Spacer(); Text("\(idxCount)").font(.body.monospacedDigit()) }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Tables").font(.headline)
+                ForEach(names, id: \.self) { name in
+                    HStack(spacing: 6) {
+                        Image(systemName: "tablecells").foregroundStyle(.secondary)
+                        Text(name).font(.system(.body, design: .monospaced))
+                    }
+                }
+            }
+        }.padding()
     }
 
     private func tableDetails(_ t: SchemaModel.Table) -> some SwiftUI.View {

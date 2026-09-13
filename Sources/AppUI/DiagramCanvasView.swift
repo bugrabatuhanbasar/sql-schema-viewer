@@ -21,18 +21,21 @@ final class DiagramCanvasNSView: NSView {
             needsDisplay = true
         }
     }
-    var selectedNode: Identifier? {
+    var selectedNodes: Set<Identifier> = [] {
         didSet { needsDisplay = true }
     }
     var highlightedNodes: Set<Identifier> = [] {
         didSet { needsDisplay = true }
     }
-    var onSelect: (Identifier?) -> Void = { _ in }
+    /// Called whenever the selection changes (click, marquee, keyboard).
+    var onSelectionChanged: (Set<Identifier>) -> Void = { _ in }
 
     private var nodeOffsets: [String: CGPoint] = [:]     // node title → user drag delta
-    private var draggingNodeTitle: String?
+    private var draggingTitles: Set<String> = []
     private var dragStartMouse: NSPoint = .zero
-    private var dragStartOffset: CGPoint = .zero
+    private var dragStartOffsets: [String: CGPoint] = [:]
+    private var marqueeAnchor: NSPoint?
+    private var marqueeCurrent: NSPoint?
     private let contentPadding: CGFloat = 40
 
     override var isFlipped: Bool { true }
@@ -156,10 +159,26 @@ final class DiagramCanvasNSView: NSView {
             let rect = rectFor(node)
             drawNode(
                 ctx: ctx, rect: rect, title: node.title, lines: node.lines,
-                selected: selectedNode?.raw == node.title,
+                selected: selectedNodes.contains(where: { $0.raw == node.title }),
                 highlighted: highlightedNodes.contains(where: { $0.raw == node.title }),
                 dark: dark
             )
+        }
+
+        // Marquee (rubber-band) rectangle over everything.
+        if let a = marqueeAnchor, let b = marqueeCurrent {
+            let rect = CGRect(
+                x: min(a.x, b.x), y: min(a.y, b.y),
+                width: abs(a.x - b.x), height: abs(a.y - b.y)
+            )
+            let accent = CGColor(red: 0.20, green: 0.55, blue: 0.95, alpha: 1)
+            ctx.setFillColor(accent.copy(alpha: 0.10)!)
+            ctx.fill(rect)
+            ctx.setStrokeColor(accent)
+            ctx.setLineWidth(1)
+            ctx.setLineDash(phase: 0, lengths: [4, 3])
+            ctx.stroke(rect)
+            ctx.setLineDash(phase: 0, lengths: [])
         }
     }
 
@@ -251,37 +270,93 @@ final class DiagramCanvasNSView: NSView {
 
     // MARK: interaction
 
-    override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        for node in scene.nodes.reversed() {
-            let r = rectFor(node)
-            if r.contains(point) {
-                selectedNode = Identifier(raw: node.title)
-                onSelect(selectedNode)
-                draggingNodeTitle = node.title
-                dragStartMouse = point
-                dragStartOffset = nodeOffsets[node.title] ?? .zero
-                NSCursor.closedHand.push()
-                return
-            }
+    /// Node under a point (topmost first), or nil for empty canvas.
+    private func nodeAt(_ point: NSPoint) -> DiagramScene.NodeShape? {
+        for node in scene.nodes.reversed() where rectFor(node).contains(point) {
+            return node
         }
-        selectedNode = nil
-        onSelect(nil)
+        return nil
+    }
+
+    private func isMultiSelectModifier(_ event: NSEvent) -> Bool {
+        event.modifierFlags.contains(.shift) || event.modifierFlags.contains(.command)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        let point = convert(event.locationInWindow, from: nil)
+        if let hit = nodeAt(point) {
+            let id = Identifier(raw: hit.title)
+            if isMultiSelectModifier(event) {
+                if selectedNodes.contains(id) { selectedNodes.remove(id) }
+                else { selectedNodes.insert(id) }
+            } else if !selectedNodes.contains(id) {
+                // Clicking a node that wasn't selected replaces the selection
+                // with just that node. If it was already part of a multi-
+                // selection, keep the whole set so we can drag them together.
+                selectedNodes = [id]
+            }
+            onSelectionChanged(selectedNodes)
+            // Start dragging every currently-selected node.
+            draggingTitles = Set(selectedNodes.map(\.raw))
+            dragStartMouse = point
+            dragStartOffsets = [:]
+            for title in draggingTitles {
+                dragStartOffsets[title] = nodeOffsets[title] ?? .zero
+            }
+            NSCursor.closedHand.push()
+        } else {
+            // Empty canvas — either clear selection or begin marquee.
+            if !isMultiSelectModifier(event) {
+                selectedNodes.removeAll()
+                onSelectionChanged(selectedNodes)
+            }
+            marqueeAnchor = point
+            marqueeCurrent = point
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let title = draggingNodeTitle else { return }
         let p = convert(event.locationInWindow, from: nil)
-        let delta = CGPoint(x: p.x - dragStartMouse.x, y: p.y - dragStartMouse.y)
-        nodeOffsets[title] = CGPoint(x: dragStartOffset.x + delta.x, y: dragStartOffset.y + delta.y)
-        invalidateIntrinsicContentSize()
-        needsDisplay = true
+        if !draggingTitles.isEmpty {
+            let dx = p.x - dragStartMouse.x
+            let dy = p.y - dragStartMouse.y
+            for title in draggingTitles {
+                let base = dragStartOffsets[title] ?? .zero
+                nodeOffsets[title] = CGPoint(x: base.x + dx, y: base.y + dy)
+            }
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        } else if marqueeAnchor != nil {
+            marqueeCurrent = p
+            needsDisplay = true
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
-        if draggingNodeTitle != nil {
+        if !draggingTitles.isEmpty {
             NSCursor.pop()
-            draggingNodeTitle = nil
+            draggingTitles.removeAll()
+            dragStartOffsets.removeAll()
+        }
+        if let a = marqueeAnchor, let b = marqueeCurrent {
+            let rect = CGRect(
+                x: min(a.x, b.x), y: min(a.y, b.y),
+                width: abs(a.x - b.x), height: abs(a.y - b.y)
+            )
+            // Ignore tiny "click" marquees (< 3pt each side) — they were
+            // just clicks on empty space, not intentional drags.
+            if rect.width >= 3 && rect.height >= 3 {
+                let hits = scene.nodes.compactMap { node -> Identifier? in
+                    rect.intersects(rectFor(node)) ? Identifier(raw: node.title) : nil
+                }
+                let additive = isMultiSelectModifier(event)
+                selectedNodes = additive ? selectedNodes.union(hits) : Set(hits)
+                onSelectionChanged(selectedNodes)
+            }
+            marqueeAnchor = nil
+            marqueeCurrent = nil
+            needsDisplay = true
         }
         super.mouseUp(with: event)
     }
@@ -292,6 +367,25 @@ final class DiagramCanvasNSView: NSView {
             addCursorRect(rectFor(node), cursor: .openHand)
         }
     }
+
+    // MARK: keyboard
+
+    override func keyDown(with event: NSEvent) {
+        // Escape clears selection.
+        if event.keyCode == 53 { // kVK_Escape
+            if !selectedNodes.isEmpty {
+                selectedNodes.removeAll()
+                onSelectionChanged(selectedNodes)
+            }
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    @objc override func selectAll(_ sender: Any?) {
+        selectedNodes = Set(scene.nodes.map { Identifier(raw: $0.title) })
+        onSelectionChanged(selectedNodes)
+    }
 }
 
 /// SwiftUI wrapper hosting the AppKit canvas inside an NSScrollView with
@@ -300,15 +394,20 @@ final class DiagramCanvasNSView: NSView {
 /// pins to the top-left edge on wide monitors.
 public struct DiagramCanvasView: NSViewRepresentable {
     public var scene: DiagramScene
-    public var selection: Identifier?
+    public var selection: Set<Identifier>
     public var highlights: Set<Identifier>
-    public var onSelect: (Identifier?) -> Void
+    public var onSelectionChanged: (Set<Identifier>) -> Void
 
-    public init(scene: DiagramScene, selection: Identifier?, highlights: Set<Identifier>, onSelect: @escaping (Identifier?) -> Void) {
+    public init(
+        scene: DiagramScene,
+        selection: Set<Identifier>,
+        highlights: Set<Identifier>,
+        onSelectionChanged: @escaping (Set<Identifier>) -> Void
+    ) {
         self.scene = scene
         self.selection = selection
         self.highlights = highlights
-        self.onSelect = onSelect
+        self.onSelectionChanged = onSelectionChanged
     }
 
     public func makeNSView(context: Context) -> NSScrollView {
@@ -325,9 +424,9 @@ public struct DiagramCanvasView: NSViewRepresentable {
 
         let canvas = DiagramCanvasNSView(frame: .zero)
         canvas.scene = scene
-        canvas.selectedNode = selection
+        canvas.selectedNodes = selection
         canvas.highlightedNodes = highlights
-        canvas.onSelect = onSelect
+        canvas.onSelectionChanged = onSelectionChanged
         scroll.documentView = canvas
         return scroll
     }
@@ -335,9 +434,9 @@ public struct DiagramCanvasView: NSViewRepresentable {
     public func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let canvas = scroll.documentView as? DiagramCanvasNSView else { return }
         canvas.scene = scene
-        canvas.selectedNode = selection
+        canvas.selectedNodes = selection
         canvas.highlightedNodes = highlights
-        canvas.onSelect = onSelect
+        canvas.onSelectionChanged = onSelectionChanged
         canvas.frame.size = canvas.intrinsicContentSize
         (scroll as? CenteringScrollView)?.recenterIfNeeded()
     }
