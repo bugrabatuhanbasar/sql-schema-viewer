@@ -25,7 +25,7 @@ public struct SchemaViewerRootView: SwiftUI.View {
                 showOrphansOnly: $showOrphansOnly,
                 selected: $selectedObject
             )
-            .frame(minWidth: 220)
+            .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 340)
         } content: {
             VStack(spacing: 0) {
                 DiagramCanvasView(
@@ -34,13 +34,15 @@ public struct SchemaViewerRootView: SwiftUI.View {
                     highlights: highlights,
                     onSelect: { selectedObject = $0 }
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 DiagnosticsBar(diagnostics: document.diagnostics, summary: document.schema.summarySentence)
             }
-            .frame(minWidth: 480, minHeight: 300)
+            .navigationSplitViewColumnWidth(min: 560, ideal: 900, max: .infinity)
         } detail: {
             DetailsPanel(schema: document.schema, selected: selectedObject)
-                .frame(minWidth: 260)
+                .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 420)
         }
+        .navigationSplitViewStyle(.balanced)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Picker("Dialect", selection: dialectBinding) {

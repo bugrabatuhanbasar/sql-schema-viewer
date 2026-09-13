@@ -24,6 +24,15 @@ public enum SVGExporter {
             let mid = (edge.from.x + edge.to.x) / 2
             let path = "M \(edge.from.x) \(edge.from.y) C \(mid) \(edge.from.y) \(mid) \(edge.to.y) \(edge.to.x) \(edge.to.y)"
             out.append(#"<path d="\#(path)" fill="none" stroke="\#(style.edgeColor)" stroke-width="1.2"/>"#)
+            // Cardinality labels 22 units from each endpoint along the edge.
+            let dx = edge.to.x - edge.from.x, dy = edge.to.y - edge.from.y
+            let len = max(1, (dx * dx + dy * dy).squareRoot())
+            let fx = edge.from.x + dx / len * 22
+            let fy = edge.from.y + dy / len * 22
+            let tx = edge.to.x - dx / len * 22
+            let ty = edge.to.y - dy / len * 22
+            out.append(#"<text x="\#(fx)" y="\#(fy)" text-anchor="middle" font-weight="600" font-size="10">\#(escape(edge.fromCardinality))</text>"#)
+            out.append(#"<text x="\#(tx)" y="\#(ty)" text-anchor="middle" font-weight="600" font-size="10">\#(escape(edge.toCardinality))</text>"#)
         }
 
         for n in scene.nodes {
