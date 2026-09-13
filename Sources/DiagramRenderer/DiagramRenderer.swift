@@ -11,6 +11,8 @@ public struct DiagramScene: Sendable {
         public init(x: Double, y: Double, width: Double, height: Double) {
             self.x = x; self.y = y; self.width = width; self.height = height
         }
+        public var midX: Double { x + width / 2 }
+        public var midY: Double { y + height / 2 }
     }
     public struct NodeShape: Sendable {
         public var rect: Rect
@@ -20,22 +22,26 @@ public struct DiagramScene: Sendable {
             self.rect = rect; self.title = title; self.lines = lines
         }
     }
-    /// A directed edge from `from` (the FK owner) to `to` (the referenced
-    /// side). `fromCardinality` is written at the owner-side endpoint,
-    /// `toCardinality` at the referenced-side endpoint. Typical values:
-    /// "1", "N", "0..1".
+    /// A directed edge between two nodes. Rects are carried directly so
+    /// renderers can compute clean rect-boundary intersections (no more
+    /// lines vanishing into the node body). Cardinality strings sit at each
+    /// end. `fromTitle`/`toTitle` name the involved nodes so a live-drag
+    /// canvas can rewire the edge to the current node position.
     public struct EdgeShape: Sendable {
-        public var from: (x: Double, y: Double)
-        public var to: (x: Double, y: Double)
+        public var fromTitle: String
+        public var toTitle: String
+        public var fromRect: Rect
+        public var toRect: Rect
         public var fromCardinality: String
         public var toCardinality: String
         public init(
-            from: (x: Double, y: Double),
-            to: (x: Double, y: Double),
+            fromTitle: String, toTitle: String,
+            fromRect: Rect, toRect: Rect,
             fromCardinality: String = "N",
             toCardinality: String = "1"
         ) {
-            self.from = from; self.to = to
+            self.fromTitle = fromTitle; self.toTitle = toTitle
+            self.fromRect = fromRect; self.toRect = toRect
             self.fromCardinality = fromCardinality
             self.toCardinality = toCardinality
         }
@@ -50,25 +56,25 @@ public struct DiagramScene: Sendable {
 public enum DiagramRenderer {
     public static func buildScene(_ schema: Schema, layout: LayoutResult) -> DiagramScene {
         var nodes: [DiagramScene.NodeShape] = []
-        var positionByName: [Identifier: NodePosition] = [:]
+        var rectByName: [Identifier: DiagramScene.Rect] = [:]
         for p in layout.positions {
-            positionByName[p.node] = p
+            let rect = DiagramScene.Rect(x: p.x, y: p.y, width: p.width, height: p.height)
+            rectByName[p.node] = rect
             let table = schema.tables[p.node]
             let lines = (table?.columns ?? []).map { "\($0.name.raw): \($0.type.displayName)" }
-            nodes.append(DiagramScene.NodeShape(
-                rect: .init(x: p.x, y: p.y, width: p.width, height: p.height),
-                title: p.node.raw,
-                lines: lines
-            ))
+            nodes.append(DiagramScene.NodeShape(rect: rect, title: p.node.raw, lines: lines))
         }
         var edges: [DiagramScene.EdgeShape] = []
         for (_, table) in schema.tables {
             for fk in table.foreignKeys {
-                guard let a = positionByName[table.name], let b = positionByName[fk.referencedTable] else { continue }
-                let (fromCard, toCard) = cardinality(for: fk, in: table, target: schema.tables[fk.referencedTable])
+                guard let fromRect = rectByName[table.name],
+                      let toRect = rectByName[fk.referencedTable] else { continue }
+                let (fromCard, toCard) = cardinality(for: fk, in: table)
                 edges.append(DiagramScene.EdgeShape(
-                    from: (a.x + a.width / 2, a.y + a.height / 2),
-                    to: (b.x + b.width / 2, b.y + b.height / 2),
+                    fromTitle: table.name.raw,
+                    toTitle: fk.referencedTable.raw,
+                    fromRect: fromRect,
+                    toRect: toRect,
                     fromCardinality: fromCard,
                     toCardinality: toCard
                 ))
@@ -77,19 +83,7 @@ public enum DiagramRenderer {
         return DiagramScene(nodes: nodes, edges: edges)
     }
 
-    /// Cardinality inference for an FK from owner-side to referenced-side.
-    /// - Referenced side is almost always "1" (FK references a PK/UNIQUE
-    ///   column set).
-    /// - Owner side is "N" unless the FK columns themselves are covered by
-    ///   a PK or UNIQUE constraint on the owner — then the relationship is
-    ///   one-to-one, so the owner side is also "1".
-    /// - Optionality: if any FK local column is nullable, the owner side is
-    ///   prefixed with "0..".
-    private static func cardinality(
-        for fk: ForeignKeySpec,
-        in owner: Table,
-        target: Table?
-    ) -> (fromCard: String, toCard: String) {
+    private static func cardinality(for fk: ForeignKeySpec, in owner: Table) -> (String, String) {
         let fkCols = Set(fk.localColumns.map(\.normalized))
         let ownerIsUnique = owner.constraints.contains { c in
             switch c {
@@ -104,10 +98,25 @@ public enum DiagramRenderer {
         let ownerCard = ownerIsUnique
             ? (anyNullable ? "0..1" : "1")
             : (anyNullable ? "0..N" : "N")
-        // Referenced side: PK by definition → "1". If the FK references a
-        // known table but the column set doesn't cover its PK, still 1
-        // (uniqueness is required by SQL for FK targets).
-        _ = target
         return (ownerCard, "1")
+    }
+}
+
+// MARK: line/rect intersection helper (shared by renderers)
+
+extension DiagramScene.Rect {
+    /// Point where a line from the rect's center toward `target` exits this
+    /// rect. Used by renderers to draw edges from node border to node
+    /// border instead of from center to center.
+    public func borderPoint(toward target: (x: Double, y: Double)) -> (x: Double, y: Double) {
+        let cx = midX, cy = midY
+        let dx = target.x - cx, dy = target.y - cy
+        if abs(dx) < 0.0001 && abs(dy) < 0.0001 { return (cx, cy) }
+        let hw = width / 2, hh = height / 2
+        // Scale factor so that (|dx|*s = hw) or (|dy|*s = hh), pick smaller
+        let sx = abs(dx) > 0.0001 ? hw / abs(dx) : .infinity
+        let sy = abs(dy) > 0.0001 ? hh / abs(dy) : .infinity
+        let s = min(sx, sy)
+        return (cx + dx * s, cy + dy * s)
     }
 }

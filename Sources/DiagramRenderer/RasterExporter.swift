@@ -65,11 +65,13 @@ public enum RasterExporter {
         ctx.setFillColor(CGColor(red: 0.98, green: 0.98, blue: 0.98, alpha: 1))
         ctx.fill(CGRect(x: -20, y: -20, width: contentSize(scene).width, height: contentSize(scene).height))
 
-        ctx.setLineWidth(1.2)
+        ctx.setLineWidth(1.3)
         ctx.setStrokeColor(CGColor(gray: 0.35, alpha: 0.7))
         for edge in scene.edges {
-            let p1 = CGPoint(x: edge.from.x, y: edge.from.y)
-            let p2 = CGPoint(x: edge.to.x, y: edge.to.y)
+            let a = edge.fromRect.borderPoint(toward: (edge.toRect.midX, edge.toRect.midY))
+            let b = edge.toRect.borderPoint(toward: (edge.fromRect.midX, edge.fromRect.midY))
+            let p1 = CGPoint(x: a.x, y: a.y)
+            let p2 = CGPoint(x: b.x, y: b.y)
             let midX = (p1.x + p2.x) / 2
             ctx.beginPath()
             ctx.move(to: p1)

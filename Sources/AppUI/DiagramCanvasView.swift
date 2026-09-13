@@ -77,6 +77,24 @@ final class DiagramCanvasNSView: NSView {
         return CGPoint(x: r.midX, y: r.midY)
     }
 
+    /// Rect for a node title including live drag offset + padding.
+    private func liveRect(forTitle title: String) -> CGRect? {
+        guard let node = scene.nodes.first(where: { $0.title == title }) else { return nil }
+        return rectFor(node)
+    }
+
+    /// Point on the rect border along the line from rect center to `target`.
+    private func borderPoint(from rect: CGRect, toward target: (x: CGFloat, y: CGFloat)) -> CGPoint {
+        let cx = rect.midX, cy = rect.midY
+        let dx = target.x - cx, dy = target.y - cy
+        if abs(dx) < 0.0001 && abs(dy) < 0.0001 { return CGPoint(x: cx, y: cy) }
+        let hw = rect.width / 2, hh = rect.height / 2
+        let sx: CGFloat = abs(dx) > 0.0001 ? hw / abs(dx) : .infinity
+        let sy: CGFloat = abs(dy) > 0.0001 ? hh / abs(dy) : .infinity
+        let s = min(sx, sy)
+        return CGPoint(x: cx + dx * s, y: cy + dy * s)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let dark = NSAppearance.currentDrawing().isDarkMode
@@ -86,31 +104,31 @@ final class DiagramCanvasNSView: NSView {
         ctx.setFillColor(bg)
         ctx.fill(dirtyRect)
 
-        // Edges (rerouted through current node centers so drags feel live).
-        ctx.setLineWidth(1.2)
+        // Edges — routed from node border to node border, live-updated
+        // through node titles so dragging follows immediately.
+        ctx.setLineWidth(1.3)
         let edgeColor = dark
-            ? CGColor(gray: 0.65, alpha: 0.7)
-            : CGColor(gray: 0.35, alpha: 0.7)
+            ? CGColor(gray: 0.70, alpha: 0.85)
+            : CGColor(gray: 0.30, alpha: 0.85)
         ctx.setStrokeColor(edgeColor)
         for edge in scene.edges {
-            let originalFromNode = scene.nodes.first { abs($0.rect.x + $0.rect.width / 2 - edge.from.x) < 0.5 && abs($0.rect.y + $0.rect.height / 2 - edge.from.y) < 0.5 }
-            let originalToNode = scene.nodes.first { abs($0.rect.x + $0.rect.width / 2 - edge.to.x) < 0.5 && abs($0.rect.y + $0.rect.height / 2 - edge.to.y) < 0.5 }
-            let p1 = originalFromNode.map { centerFor(title: $0.title) ?? CGPoint(x: edge.from.x + contentPadding, y: edge.from.y + contentPadding) }
-                ?? CGPoint(x: edge.from.x + contentPadding, y: edge.from.y + contentPadding)
-            let p2 = originalToNode.map { centerFor(title: $0.title) ?? CGPoint(x: edge.to.x + contentPadding, y: edge.to.y + contentPadding) }
-                ?? CGPoint(x: edge.to.x + contentPadding, y: edge.to.y + contentPadding)
-
-            // Bezier path
-            let midX = (p1.x + p2.x) / 2
+            guard let fromRect = liveRect(forTitle: edge.fromTitle),
+                  let toRect = liveRect(forTitle: edge.toTitle) else { continue }
+            let a = borderPoint(from: fromRect, toward: (toRect.midX, toRect.midY))
+            let b = borderPoint(from: toRect, toward: (fromRect.midX, fromRect.midY))
+            let midX = (a.x + b.x) / 2
             ctx.beginPath()
-            ctx.move(to: p1)
-            ctx.addCurve(to: p2, control1: CGPoint(x: midX, y: p1.y), control2: CGPoint(x: midX, y: p2.y))
+            ctx.move(to: a)
+            ctx.addCurve(to: b, control1: CGPoint(x: midX, y: a.y), control2: CGPoint(x: midX, y: b.y))
             ctx.strokePath()
-
-            // Cardinality labels near each endpoint
-            let (fromLabel, toLabel) = (edge.fromCardinality, edge.toCardinality)
-            drawCardinalityLabel(fromLabel, near: p1, opposite: p2, in: ctx, dark: dark)
-            drawCardinalityLabel(toLabel, near: p2, opposite: p1, in: ctx, dark: dark)
+            // Cardinality label — 18pt OUTSIDE the node border, along the edge.
+            let dx = b.x - a.x, dy = b.y - a.y
+            let len = max(1, sqrt(dx * dx + dy * dy))
+            let ux = dx / len, uy = dy / len
+            let fromLabelPoint = CGPoint(x: a.x + ux * 18, y: a.y + uy * 18)
+            let toLabelPoint = CGPoint(x: b.x - ux * 18, y: b.y - uy * 18)
+            drawCardinalityLabel(edge.fromCardinality, at: fromLabelPoint, in: ctx, dark: dark)
+            drawCardinalityLabel(edge.toCardinality,   at: toLabelPoint,   in: ctx, dark: dark)
         }
 
         // Nodes
@@ -125,21 +143,14 @@ final class DiagramCanvasNSView: NSView {
         }
     }
 
-    private func drawCardinalityLabel(_ text: String, near p: CGPoint, opposite q: CGPoint, in ctx: CGContext, dark: Bool) {
-        // Position 22 pt along the edge from p toward q, offset slightly
-        // above the line for legibility.
-        let dx = q.x - p.x, dy = q.y - p.y
-        let len = max(1, sqrt(dx * dx + dy * dy))
-        let t: CGFloat = 22
-        let point = CGPoint(x: p.x + dx / len * t, y: p.y + dy / len * t)
-        // pill background
+    private func drawCardinalityLabel(_ text: String, at point: CGPoint, in ctx: CGContext, dark: Bool) {
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
             .foregroundColor: dark ? NSColor.white : NSColor(white: 0.15, alpha: 1),
         ]
         let attr = NSAttributedString(string: text, attributes: attrs)
         let size = attr.size()
-        let pad: CGFloat = 4
+        let pad: CGFloat = 5
         let bgRect = CGRect(
             x: point.x - size.width / 2 - pad,
             y: point.y - size.height / 2 - 1,
@@ -147,13 +158,13 @@ final class DiagramCanvasNSView: NSView {
             height: size.height + 2
         )
         let bgColor = dark
-            ? CGColor(red: 0.18, green: 0.19, blue: 0.21, alpha: 0.9)
-            : CGColor(red: 1, green: 1, blue: 1, alpha: 0.92)
+            ? CGColor(red: 0.18, green: 0.19, blue: 0.21, alpha: 0.95)
+            : CGColor(red: 1, green: 1, blue: 1, alpha: 0.97)
         ctx.setFillColor(bgColor)
-        let path = CGPath(roundedRect: bgRect, cornerWidth: 4, cornerHeight: 4, transform: nil)
+        let path = CGPath(roundedRect: bgRect, cornerWidth: 5, cornerHeight: 5, transform: nil)
         ctx.addPath(path); ctx.fillPath()
-        ctx.setStrokeColor(dark ? CGColor(gray: 0.5, alpha: 0.6) : CGColor(gray: 0.7, alpha: 0.6))
-        ctx.setLineWidth(0.5)
+        ctx.setStrokeColor(dark ? CGColor(gray: 0.55, alpha: 0.7) : CGColor(gray: 0.65, alpha: 0.7))
+        ctx.setLineWidth(0.6)
         ctx.addPath(path); ctx.strokePath()
         NSGraphicsContext.current?.saveGraphicsState()
         attr.draw(at: NSPoint(x: bgRect.minX + pad, y: bgRect.minY + 1))

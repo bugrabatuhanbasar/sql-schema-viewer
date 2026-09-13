@@ -88,34 +88,49 @@ public enum LayoutEngine {
         for id in names { groups[layer[id]!, default: []].append(id) }
         let layers = groups.keys.sorted()
 
-        var positions: [NodePosition] = []
-        var y: Double = 0
-        var maxWidth: Double = 0
+        // Precompute per-layer row widths so we can horizontally center
+        // each layer against the widest one — otherwise sparse layers hug
+        // the left edge and the diagram looks lopsided.
+        var perLayerIds: [[Identifier]] = []
+        var perLayerHeights: [[Double]] = []
+        var perLayerWidth: [Double] = []
         for l in layers {
             let ids = groups[l]!.sorted { $0.normalized < $1.normalized }
             let heights = ids.map { id -> Double in
                 let cols = schema.tables[id]?.columns.count ?? 0
                 return headerHeight + Double(max(cols, 1)) * rowHeight
             }
+            perLayerIds.append(ids)
+            perLayerHeights.append(heights)
+            let n = Double(ids.count)
+            let w = n * nodeWidth + max(0, n - 1) * horizontalGap
+            perLayerWidth.append(w)
+        }
+        let maxLayerWidth = perLayerWidth.max() ?? nodeWidth
+
+        var positions: [NodePosition] = []
+        var y: Double = 0
+        for (li, ids) in perLayerIds.enumerated() {
+            let heights = perLayerHeights[li]
             let rowHeightMax = heights.max() ?? headerHeight
-            var x: Double = 0
+            let layerWidth = perLayerWidth[li]
+            var x: Double = (maxLayerWidth - layerWidth) / 2
             for (idx, id) in ids.enumerated() {
                 let h = heights[idx]
+                // Vertically center the row so shorter tables sit on the
+                // same visual center-line as tall ones.
+                let rowY = y + (rowHeightMax - h) / 2
                 positions.append(NodePosition(
-                    node: id,
-                    x: x,
-                    y: y,
-                    width: nodeWidth,
-                    height: h
+                    node: id, x: x, y: rowY,
+                    width: nodeWidth, height: h
                 ))
                 x += nodeWidth + horizontalGap
             }
-            maxWidth = max(maxWidth, x - horizontalGap)
             y += rowHeightMax + verticalGap
         }
         return LayoutResult(
             positions: positions,
-            contentSize: (max(maxWidth, nodeWidth), max(y - verticalGap, headerHeight))
+            contentSize: (max(maxLayerWidth, nodeWidth), max(y - verticalGap, headerHeight))
         )
     }
 }
