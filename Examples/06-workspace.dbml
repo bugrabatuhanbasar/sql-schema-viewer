@@ -1,0 +1,138 @@
+// =====================================================================
+// 06 · Small · Team collaboration workspace
+// Dialect: DBML (dbml-lang.org)
+// Tables:  ~15
+// Purpose: Exercises the DBML parser: `Table` blocks with typed columns,
+//          `[pk, unique, not null, ref: > other.id, note: '...']`
+//          attribute lists, and top-level `Ref:` lines with >, <, -
+//          glyphs. A workspace with users, workspaces, projects, tasks,
+//          documents, comments, and integrations.
+// =====================================================================
+
+Table workspaces {
+  id integer [pk, increment]
+  slug varchar [unique, not null]
+  name varchar [not null]
+  plan_tier varchar [note: 'free | pro | enterprise']
+  created_at timestamp [not null]
+}
+
+Table users {
+  id integer [pk, increment]
+  email varchar [unique, not null]
+  full_name varchar [not null]
+  avatar_url varchar
+  created_at timestamp [not null]
+}
+
+Table workspace_members {
+  id integer [pk, increment]
+  workspace_id integer [not null, ref: > workspaces.id]
+  user_id integer [not null, ref: > users.id]
+  role varchar [not null, note: 'owner | admin | member | guest']
+  joined_at timestamp [not null]
+}
+
+Table projects {
+  id integer [pk, increment]
+  workspace_id integer [not null, ref: > workspaces.id]
+  key varchar [not null, note: 'e.g. ENG, DES']
+  name varchar [not null]
+  archived boolean [not null, default: false]
+  created_at timestamp [not null]
+}
+
+Table project_members {
+  id integer [pk, increment]
+  project_id integer [not null, ref: > projects.id]
+  user_id integer [not null, ref: > users.id]
+  role varchar [not null]
+}
+
+Table task_statuses {
+  id integer [pk, increment]
+  project_id integer [not null, ref: > projects.id]
+  name varchar [not null, note: 'e.g. Backlog, In Progress, Done']
+  position integer [not null]
+  is_terminal boolean [not null, default: false]
+}
+
+Table tasks {
+  id integer [pk, increment]
+  project_id integer [not null, ref: > projects.id]
+  status_id integer [not null, ref: > task_statuses.id]
+  reporter_id integer [not null, ref: > users.id]
+  assignee_id integer [ref: > users.id]
+  parent_task_id integer [ref: > tasks.id]
+  title varchar [not null]
+  body_md text
+  priority varchar
+  due_date date
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+}
+
+Table task_watchers {
+  task_id integer [not null, ref: > tasks.id]
+  user_id integer [not null, ref: > users.id]
+}
+
+Table task_comments {
+  id integer [pk, increment]
+  task_id integer [not null, ref: > tasks.id]
+  author_id integer [not null, ref: > users.id]
+  body_md text [not null]
+  created_at timestamp [not null]
+}
+
+Table labels {
+  id integer [pk, increment]
+  workspace_id integer [not null, ref: > workspaces.id]
+  slug varchar [not null]
+  name varchar [not null]
+  color varchar
+}
+
+Table task_labels {
+  task_id integer [not null, ref: > tasks.id]
+  label_id integer [not null, ref: > labels.id]
+}
+
+Table documents {
+  id integer [pk, increment]
+  workspace_id integer [not null, ref: > workspaces.id]
+  parent_id integer [ref: > documents.id]
+  author_id integer [not null, ref: > users.id]
+  title varchar [not null]
+  body_md text
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+}
+
+Table document_comments {
+  id integer [pk, increment]
+  document_id integer [not null, ref: > documents.id]
+  author_id integer [not null, ref: > users.id]
+  body_md text [not null]
+  created_at timestamp [not null]
+}
+
+Table integrations {
+  id integer [pk, increment]
+  workspace_id integer [not null, ref: > workspaces.id]
+  kind varchar [not null, note: 'github, slack, linear, ...']
+  external_id varchar [not null]
+  installed_by integer [ref: > users.id]
+  installed_at timestamp [not null]
+}
+
+Table audit_events {
+  id integer [pk, increment]
+  workspace_id integer [not null, ref: > workspaces.id]
+  actor_id integer [ref: > users.id]
+  entity varchar [not null]
+  entity_id integer [not null]
+  action varchar [not null]
+  payload text
+  created_at timestamp [not null]
+}
