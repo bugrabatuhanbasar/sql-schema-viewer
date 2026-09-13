@@ -3,12 +3,26 @@ import Foundation
 public struct AnalysisStats: Hashable, Sendable, Codable {
     public var fullyParsedObjects: Int
     public var partiallyParsedObjects: Int
+    /// Statements the parser recognized but doesn't fully support yet.
+    /// A truly "unsupported" statement — the parser saw something it
+    /// couldn't interpret.
     public var skippedStatements: Int
+    /// Statements the parser intentionally ignores because they don't
+    /// describe schema: `BEGIN` / `COMMIT` / `ROLLBACK`, DML like
+    /// `SELECT` / `INSERT`, session `SET`, `GRANT` / `REVOKE`, etc.
+    /// These are not errors — they simply have no schema footprint.
+    public var ignoredStatements: Int
 
-    public init(fullyParsedObjects: Int = 0, partiallyParsedObjects: Int = 0, skippedStatements: Int = 0) {
+    public init(
+        fullyParsedObjects: Int = 0,
+        partiallyParsedObjects: Int = 0,
+        skippedStatements: Int = 0,
+        ignoredStatements: Int = 0
+    ) {
         self.fullyParsedObjects = fullyParsedObjects
         self.partiallyParsedObjects = partiallyParsedObjects
         self.skippedStatements = skippedStatements
+        self.ignoredStatements = ignoredStatements
     }
 }
 
@@ -39,13 +53,17 @@ public struct Schema: Sendable, Codable {
         self.stats = stats
     }
 
-    /// Human-readable analysis summary matching the spec's example wording.
+    /// Human-readable analysis summary. The wording matches the spec's
+    /// example, with an appended clause when non-schema DML/transaction
+    /// statements were ignored (so users understand `BEGIN;`/`COMMIT;`/
+    /// `SELECT` aren't errors).
     public var summarySentence: String {
-        let objectCount = tables.count + views.count + routines.count + triggers.count
         var parts: [String] = []
         parts.append("Found \(tables.count) tables, \(views.count) views, and \(routines.count) functions.")
         parts.append("Fully parsed \(stats.fullyParsedObjects) objects, partially parsed \(stats.partiallyParsedObjects) objects, and skipped \(stats.skippedStatements) unsupported statements.")
-        _ = objectCount
+        if stats.ignoredStatements > 0 {
+            parts.append("Ignored \(stats.ignoredStatements) non-schema statements (transaction / DML / session).")
+        }
         return parts.joined(separator: " ")
     }
 }

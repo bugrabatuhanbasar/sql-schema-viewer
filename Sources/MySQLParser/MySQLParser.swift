@@ -26,7 +26,7 @@ public struct MySQLParser: StatementParser {
         var pendingIndexes: [Index] = []
         var pendingConstraints: [(Identifier, [Constraint])] = []
 
-        var fully = 0, partial = 0, skipped = 0
+        var fully = 0, partial = 0, skipped = 0, ignored = 0
         let recognizer = MySQLStatementRecognizer(file: file, lineIndex: index, flavor: flavor)
 
         for slice in slices {
@@ -41,7 +41,7 @@ public struct MySQLParser: StatementParser {
             case .parsedTrigger(let t): schema.triggers[t.name] = t; partial += 1
             case .parsedRoutine(let r): schema.routines[r.name] = r; partial += 1
             case .skipped(let d): diagnostics.append(d); skipped += 1
-            case .ignored: skipped += 1
+            case .ignored: ignored += 1
             }
         }
 
@@ -73,7 +73,8 @@ public struct MySQLParser: StatementParser {
         schema.stats = AnalysisStats(
             fullyParsedObjects: fully,
             partiallyParsedObjects: partial,
-            skippedStatements: skipped
+            skippedStatements: skipped,
+            ignoredStatements: ignored
         )
         schema.diagnostics = diagnostics
         return ParseResult(value: schema, diagnostics: diagnostics)

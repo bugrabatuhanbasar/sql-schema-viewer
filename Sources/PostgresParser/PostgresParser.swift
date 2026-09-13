@@ -23,7 +23,7 @@ public struct PostgresParser: StatementParser {
         var pendingTableComments: [(Identifier, String)] = []
         var pendingColumnComments: [(Identifier, Identifier, String)] = []
 
-        var fully = 0, partial = 0, skipped = 0
+        var fully = 0, partial = 0, skipped = 0, ignored = 0
 
         for slice in slices {
             let outcome = recognizer.recognize(slice: slice)
@@ -57,7 +57,7 @@ public struct PostgresParser: StatementParser {
             case .skipped(let diag):
                 diagnostics.append(diag); skipped += 1
             case .ignored:
-                skipped += 1
+                ignored += 1
             }
         }
 
@@ -111,7 +111,8 @@ public struct PostgresParser: StatementParser {
         schema.stats = AnalysisStats(
             fullyParsedObjects: fully,
             partiallyParsedObjects: partial,
-            skippedStatements: skipped
+            skippedStatements: skipped,
+            ignoredStatements: ignored
         )
         schema.diagnostics = diagnostics
         return ParseResult(value: schema, diagnostics: diagnostics)

@@ -17,7 +17,7 @@ public struct SQLiteParser: StatementParser {
         var diagnostics: [Diagnostic] = []
         var pendingIndexes: [Index] = []
 
-        var fully = 0, partial = 0, skipped = 0
+        var fully = 0, partial = 0, skipped = 0, ignored = 0
         let recognizer = SQLiteStatementRecognizer(file: file, lineIndex: index)
 
         for slice in slices {
@@ -29,7 +29,7 @@ public struct SQLiteParser: StatementParser {
             case .parsedView(let v): schema.views[v.name] = v; partial += 1
             case .parsedTrigger(let t): schema.triggers[t.name] = t; partial += 1
             case .skipped(let d): diagnostics.append(d); skipped += 1
-            case .ignored: skipped += 1
+            case .ignored: ignored += 1
             }
         }
         for idx in pendingIndexes {
@@ -38,7 +38,7 @@ public struct SQLiteParser: StatementParser {
                 diagnostics.append(Diagnostic(severity: .warning, code: DiagnosticCode.danglingReference, message: "Index references unknown table \(idx.table.raw)", source: idx.source))
             }
         }
-        schema.stats = AnalysisStats(fullyParsedObjects: fully, partiallyParsedObjects: partial, skippedStatements: skipped)
+        schema.stats = AnalysisStats(fullyParsedObjects: fully, partiallyParsedObjects: partial, skippedStatements: skipped, ignoredStatements: ignored)
         schema.diagnostics = diagnostics
         return ParseResult(value: schema, diagnostics: diagnostics)
     }

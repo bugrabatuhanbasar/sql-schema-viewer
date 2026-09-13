@@ -19,7 +19,7 @@ public struct OracleParser: StatementParser {
         var pendingConstraints: [(Identifier, [Constraint])] = []
         var pendingComments: [(kind: OracleCommentKind, table: Identifier, column: Identifier?, text: String)] = []
 
-        var fully = 0, partial = 0, skipped = 0
+        var fully = 0, partial = 0, skipped = 0, ignored = 0
         let recognizer = OracleStatementRecognizer(file: file, lineIndex: index)
 
         for slice in slices {
@@ -38,7 +38,7 @@ public struct OracleParser: StatementParser {
             case .parsedTrigger(let t): schema.triggers[t.name] = t; partial += 1
             case .parsedRoutine(let r): schema.routines[r.name] = r; partial += 1
             case .skipped(let d): diagnostics.append(d); skipped += 1
-            case .ignored: skipped += 1
+            case .ignored: ignored += 1
             }
         }
         for idx in pendingIndexes {
@@ -60,7 +60,7 @@ public struct OracleParser: StatementParser {
                 schema.tables[c.table] = t
             }
         }
-        schema.stats = AnalysisStats(fullyParsedObjects: fully, partiallyParsedObjects: partial, skippedStatements: skipped)
+        schema.stats = AnalysisStats(fullyParsedObjects: fully, partiallyParsedObjects: partial, skippedStatements: skipped, ignoredStatements: ignored)
         schema.diagnostics = diagnostics
         return ParseResult(value: schema, diagnostics: diagnostics)
     }
