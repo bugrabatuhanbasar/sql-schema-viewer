@@ -30,11 +30,11 @@ public enum LayoutEngine {
     /// Public entrypoint. Uses layered layout by default.
     public static func layout(
         _ schema: Schema,
-        nodeWidth: Double = 240,
+        nodeWidth: Double = 260,
         rowHeight: Double = 18,
         headerHeight: Double = 34,
-        horizontalGap: Double = 60,
-        verticalGap: Double = 40
+        horizontalGap: Double = 90,
+        verticalGap: Double = 80
     ) -> LayoutResult {
         layered(
             schema,
@@ -48,11 +48,11 @@ public enum LayoutEngine {
 
     public static func layered(
         _ schema: Schema,
-        nodeWidth: Double = 240,
+        nodeWidth: Double = 260,
         rowHeight: Double = 18,
         headerHeight: Double = 34,
-        horizontalGap: Double = 60,
-        verticalGap: Double = 40
+        horizontalGap: Double = 90,
+        verticalGap: Double = 80
     ) -> LayoutResult {
         let names = schema.tables.keys.sorted { $0.normalized < $1.normalized }
         if names.isEmpty { return LayoutResult() }
@@ -88,14 +88,29 @@ public enum LayoutEngine {
         for id in names { groups[layer[id]!, default: []].append(id) }
         let layers = groups.keys.sorted()
 
-        // Precompute per-layer row widths so we can horizontally center
-        // each layer against the widest one — otherwise sparse layers hug
-        // the left edge and the diagram looks lopsided.
+        // Order nodes within each layer using a median heuristic over the
+        // previous layer's positions (classic Sugiyama step). This dramatically
+        // cuts edge crossings vs. an alphabetical order: children sit close
+        // to the horizontal position of their parents, so an edge from A
+        // (layer N) to B (layer N+1) tends to run near-straight instead of
+        // sweeping across other nodes on the way down.
         var perLayerIds: [[Identifier]] = []
         var perLayerHeights: [[Double]] = []
         var perLayerWidth: [Double] = []
-        for l in layers {
-            let ids = groups[l]!.sorted { $0.normalized < $1.normalized }
+        var indexByName: [Identifier: Int] = [:]
+        for (li, l) in layers.enumerated() {
+            var ids = groups[l]!
+            if li == 0 {
+                ids.sort { $0.normalized < $1.normalized }
+            } else {
+                ids.sort { a, b in
+                    let am = medianParentIndex(of: a, parents: parents, indexByName: indexByName)
+                    let bm = medianParentIndex(of: b, parents: parents, indexByName: indexByName)
+                    if am == bm { return a.normalized < b.normalized }
+                    return am < bm
+                }
+            }
+            for (i, id) in ids.enumerated() { indexByName[id] = i }
             let heights = ids.map { id -> Double in
                 let cols = schema.tables[id]?.columns.count ?? 0
                 return headerHeight + Double(max(cols, 1)) * rowHeight
@@ -132,5 +147,17 @@ public enum LayoutEngine {
             positions: positions,
             contentSize: (max(maxLayerWidth, nodeWidth), max(y - verticalGap, headerHeight))
         )
+    }
+
+    private static func medianParentIndex(
+        of node: Identifier,
+        parents: [Identifier: Set<Identifier>],
+        indexByName: [Identifier: Int]
+    ) -> Double {
+        let ps = (parents[node] ?? []).compactMap { indexByName[$0] }.sorted()
+        if ps.isEmpty { return .greatestFiniteMagnitude }
+        let n = ps.count
+        if n % 2 == 1 { return Double(ps[n / 2]) }
+        return Double(ps[n / 2 - 1] + ps[n / 2]) / 2
     }
 }
