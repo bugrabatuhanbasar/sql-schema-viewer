@@ -10,7 +10,8 @@ specification.
 
 ## Status
 
-Milestone **M6 — DBML import + export** (M1–M5 also complete). On top of M1's
+Milestone **M7/M8 — View + trigger/routine dependency extraction**
+(M1–M6 also complete). On top of M1's
 foundations and M2's PostgreSQL vertical slice + SwiftUI app, the MySQL /
 MariaDB parser is now in place (`CREATE TABLE` with backticks, engine
 trailers, `AUTO_INCREMENT`, table/column FKs; `ALTER TABLE`; `CREATE
