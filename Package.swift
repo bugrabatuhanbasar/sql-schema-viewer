@@ -70,6 +70,7 @@ let package = Package(
         .testTarget(name: "OracleParserTests", dependencies: ["OracleParser", "SchemaModel"]),
         .testTarget(name: "DBMLParserTests", dependencies: ["DBMLParser", "SchemaModel"]),
         .testTarget(name: "DependencyAnalyzerTests", dependencies: ["DependencyAnalyzer", "SchemaModel"]),
+        .testTarget(name: "QualityChecksTests", dependencies: ["QualityChecks", "SchemaModel"]),
         .testTarget(name: "DialectDetectorTests", dependencies: ["DialectDetector", "SchemaModel"]),
         .testTarget(name: "LayoutEngineTests", dependencies: ["LayoutEngine", "SchemaModel"]),
         .testTarget(name: "NetworkGuardTests", dependencies: ["SchemaKit"]),
