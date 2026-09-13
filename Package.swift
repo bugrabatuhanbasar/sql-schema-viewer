@@ -72,6 +72,7 @@ let package = Package(
         .testTarget(name: "DependencyAnalyzerTests", dependencies: ["DependencyAnalyzer", "SchemaModel"]),
         .testTarget(name: "QualityChecksTests", dependencies: ["QualityChecks", "SchemaModel"]),
         .testTarget(name: "RendererGoldenTests", dependencies: ["DiagramRenderer", "LayoutEngine", "SchemaModel"]),
+        .testTarget(name: "CLIIntegrationTests", dependencies: []),
         .testTarget(name: "DialectDetectorTests", dependencies: ["DialectDetector", "SchemaModel"]),
         .testTarget(name: "LayoutEngineTests", dependencies: ["LayoutEngine", "SchemaModel"]),
         .testTarget(name: "NetworkGuardTests", dependencies: ["SchemaKit"]),

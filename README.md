@@ -10,16 +10,8 @@ specification.
 
 ## Status
 
-Milestone **M11 — Full CLI (`inspect` / `check` / `render` / `export`)**
-(M1–M10 also complete). Every SQL dialect, DBML, dependency detection,
-quality checks, and PNG/SVG/PDF/Mermaid/DBML export are wired end-to-end. On top of M1's
-foundations and M2's PostgreSQL vertical slice + SwiftUI app, the MySQL /
-MariaDB parser is now in place (`CREATE TABLE` with backticks, engine
-trailers, `AUTO_INCREMENT`, table/column FKs; `ALTER TABLE`; `CREATE
-INDEX`; view/trigger/routine headers), plus an expanded dialect detector
-and its unit tests. Fault-tolerant parsing is formalized: one malformed
-statement never discards the rest of the file. Xcode app setup is
-documented in [App/README.md](App/README.md).
+**Version 1 feature-complete.** All spec §V1 acceptance criteria are in
+place. See the checklist below.
 
 ## Requirements
 
@@ -36,41 +28,82 @@ swift test
 ```
 
 The `NetworkGuardTests` target asserts that no first-party code links against
-`URLSession`, `Network.framework`, or `CFNetwork`.
+`URLSession`, `Network.framework`, or `CFNetwork`. There are **zero**
+third-party runtime dependencies.
+
+## The CLI
+
+```
+swift build -c release
+.build/release/schema-viewer inspect schema.sql
+.build/release/schema-viewer check schema.sql
+.build/release/schema-viewer render schema.sql --output schema.svg
+.build/release/schema-viewer export schema.sql --format dbml --output schema.dbml
+```
+
+Full help: `schema-viewer help`.
+
+Exit codes:
+- `0` success
+- `1` quality-check warnings surfaced
+- `2` parser errors surfaced
+- `64` usage error
+- `74` I/O error
+
+## The macOS app
+
+The SwiftUI application lives under [App/](App/). See
+[App/README.md](App/README.md) for the one-time Xcode project setup steps.
+
+Bundle identifier: `org.macsqlschemaviewer.MacSQLSchemaViewer`. Sandbox on;
+only user-selected read/write is granted; **no network entitlements are ever
+declared**.
 
 ## Repository layout
 
 ```
 Sources/
-  SchemaModel/         Normalized intermediate representation (tables, columns,
-                       constraints, indexes, views, triggers, routines,
-                       references, diagnostics).
-  SQLLexer/            Dialect-parameterized tokenizer with source-range tracking.
-  ParserCore/          Statement splitter, panic-mode recovery, parser protocols.
-  PostgresParser/      (M2)
-  MySQLParser/         (M3) MariaDB shares this target via a dialect flag.
-  SQLiteParser/        (M4)
-  OracleParser/        (M5)
-  DBMLParser/          (M6) DBML import + serializer.
+  SchemaModel/         Normalized intermediate representation.
+  SQLLexer/            Dialect-parameterized tokenizer.
+  ParserCore/          Statement splitter, panic-mode recovery, protocols.
+  PostgresParser/      CREATE / ALTER TABLE, CREATE INDEX, COMMENT, view /
+                       trigger / routine headers.
+  MySQLParser/         MySQL + MariaDB (shared target, flavor flag).
+  SQLiteParser/        Affinity-typed CREATE TABLE, WITHOUT ROWID,
+                       AUTOINCREMENT.
+  OracleParser/        NUMBER / VARCHAR2 / DATE / PL-SQL headers as .partial.
+  DBMLParser/          DBML import + serializer.
   DialectDetector/     Heuristic dialect detection.
-  DependencyAnalyzer/  View / trigger / function / procedure dependency graph.
-  QualityChecks/       V1 schema-quality checks.
-  LayoutEngine/        Layered + force-directed diagram layout.
-  DiagramRenderer/     Core Graphics scene, PNG / SVG / PDF exporters.
-  MermaidExporter/     Mermaid ER diagram text emitter.
-  SchemaKit/           Umbrella facade consumed by both app and CLI.
-  SchemaViewerCLI/     `schema-viewer` executable.
-Tests/
-  ...
+  DependencyAnalyzer/  FK edges + body-scan for view/trigger/routine.
+  QualityChecks/       9 checks per spec §11.
+  LayoutEngine/        Layered longest-path layout.
+  DiagramRenderer/     DiagramScene + SVG serializer + PNG/PDF via CG.
+  MermaidExporter/     Mermaid ER text emitter.
+  SchemaKit/           Umbrella facade consumed by app and CLI.
+  AppUI/               SwiftUI three-pane document window with CG canvas.
+  SchemaViewerCLI/     schema-viewer executable.
 ```
 
-## macOS app target
+## V1 Acceptance Criteria (spec §V1)
 
-The SwiftUI application lives under [App/](App/). See
-[App/README.md](App/README.md) for the one-time Xcode project setup steps.
-Bundle identifier: `org.macsqlschemaviewer.MacSQLSchemaViewer`.
-Sandbox is on; only user-selected read/write is granted; no network
-entitlements are ever declared.
+- [x] Opens PostgreSQL, MySQL, SQLite, MariaDB, and Oracle DDL files.
+- [x] Imports and exports DBML.
+- [x] Displays tables, columns, keys, constraints, indexes, and
+      relationships.
+- [x] Displays view and materialized-view dependencies.
+- [x] Displays detectable trigger, function, and procedure dependencies
+      (dynamic-SQL references marked `.partial`).
+- [x] Continues parsing the rest of a file after encountering an invalid
+      statement (per-slice isolation + panic-mode recovery).
+- [x] Performs the basic schema-quality checks defined in §11.
+- [x] Exports PNG, SVG, PDF, Mermaid, and DBML.
+- [x] Includes a local CLI that uses the same analysis engine as the GUI.
+- [x] Never executes SQL.
+- [x] Never connects to a database or internet service — enforced by
+      `NetworkGuardTests`, no network entitlement, and zero third-party
+      runtime dependencies.
+- [x] Usable performance for a schema of at least 200 tables (perf test
+      in `PostgresParserTests` parses 200 tables well under 2 s).
 
 ## License
 
