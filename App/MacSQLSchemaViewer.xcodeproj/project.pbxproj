@@ -9,12 +9,14 @@
 /* Begin PBXBuildFile section */
 		9EF48349A48CEC14E2DE3A0D /* MacSQLSchemaViewerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F36B1F19DF9618AD1830088 /* MacSQLSchemaViewerApp.swift */; };
 		A727B1FCF1F1936CDD25F885 /* AppUI in Frameworks */ = {isa = PBXBuildFile; productRef = 15CDFEE0ADF52BACB80FC86F /* AppUI */; };
+		B243D5D987284B7798A45EDD /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C40D61144FC580B4B2DF93A1 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		04B8F9E020A1C4F51FB58489 /* MacSQLSchemaViewer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacSQLSchemaViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1F36B1F19DF9618AD1830088 /* MacSQLSchemaViewerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSQLSchemaViewerApp.swift; sourceTree = "<group>"; };
 		A0C1C90E6348E608CC815F67 /* sql-schema-viewer */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "sql-schema-viewer"; path = ..; sourceTree = SOURCE_ROOT; };
+		C40D61144FC580B4B2DF93A1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -32,6 +34,7 @@
 		49F5ABF556A8D43AD07BC06C /* Source */ = {
 			isa = PBXGroup;
 			children = (
+				C40D61144FC580B4B2DF93A1 /* Assets.xcassets */,
 				1F36B1F19DF9618AD1830088 /* MacSQLSchemaViewerApp.swift */,
 			);
 			path = Source;
@@ -70,6 +73,7 @@
 			buildConfigurationList = 39AA72E23E578EC3B5B1048B /* Build configuration list for PBXNativeTarget "MacSQLSchemaViewer" */;
 			buildPhases = (
 				6429635E65D9430F0B5918B5 /* Sources */,
+				09368CD260783F7DF3B48489 /* Resources */,
 				9AA95ECC4C4BF10FDD7FD609 /* Frameworks */,
 			);
 			buildRules = (
@@ -121,6 +125,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		09368CD260783F7DF3B48489 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B243D5D987284B7798A45EDD /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		6429635E65D9430F0B5918B5 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -136,7 +151,7 @@
 		41C251D3C9B42DB4CAB9A6F9 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Source/MacSQLSchemaViewer.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -217,7 +232,7 @@
 		959FBF42D06976C8B2B85114 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Source/MacSQLSchemaViewer.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
