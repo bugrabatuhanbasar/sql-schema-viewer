@@ -57,7 +57,11 @@ final class DiagramCanvasNSView: NSView {
     private var selectedEdgeIndex: Int? {
         didSet { needsDisplay = true }
     }
-    private let contentPadding: CGFloat = 40
+    /// Empty airspace on every side of the diagram. Generous so that
+    /// panning past the outermost tables still gives the viewer room to
+    /// breathe — otherwise scrolling all the way to a corner slams the
+    /// outermost node against the window edge with no margin.
+    private let contentPadding: CGFloat = 400
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
