@@ -1,276 +1,76 @@
 import Foundation
 import SchemaModel
 
-/// Right-angle edge router with channel packing.
+/// Right-angle edge router used for the "Orthogonal" edge routing style.
 ///
-/// # Design
+/// # Algorithm — deliberately simple, ERD-tool-classic
 ///
-/// Given a set of node rects and a set of FK edges (source rect → target
-/// rect), produce for each edge a polyline of the form:
+/// For every FK edge we pick the two node faces the edge should cross based
+/// on the dominant axis (dy vs dx), then draw a plain Z-shape from the
+/// centre of the source's face to the centre of the target's face:
 ///
 /// ```
-///   source ─▶ vertical stub ─▶ horizontal channel ─▶ vertical stub ─▶ target
+///   source-centre ─▶ mid-channel  ─▶  target-centre
+///        │                                 ▲
+///        └───────── one bend ─────────────┘
 /// ```
 ///
-/// Each edge picks a **port** on each end (bottom/top/left/right), and the
-/// port slot is distributed across the node's side so multiple edges on
-/// the same node don't overlap. Horizontal segments run through **channels**
-/// — thin strips of empty space between layers — and multiple edges that
-/// share a channel are packed onto distinct sub-lanes so they don't collide.
+/// If source and target sit on the same axis the polyline collapses to a
+/// straight line. Corners are sharp — no bezier smoothing — so the output
+/// looks like the connectors in dbdiagram.io / DBeaver / DrawSQL rather
+/// than a schematic bezier arc.
 ///
-/// This is a compact, one-pass heuristic — not full Sugiyama — but it
-/// matches what professional ERD tools produce for typical FK graphs.
+/// The older port-fanning + channel-packing pass produced too many wiggles
+/// on hub tables; this version accepts that multiple edges leaving the
+/// same face share a starting point, which is what human diagrams do too.
 public enum OrthogonalRouter {
 
-    public struct Config: Sendable {
-        /// How far from a rect's corner the outermost ports sit — smaller
-        /// = ports fan across more of the side, room for more edges.
-        public var portInsetFromRectCorner: Double = 14
-        /// Straight run right off the node border before the polyline bends
-        /// into the channel. Longer stubs = more separation between
-        /// converging edges.
-        public var stubLength: Double = 34
-        /// Vertical (or horizontal) distance between adjacent lanes when
-        /// two edges share a channel bin.
-        public var channelLaneStep: Double = 16
-        public init() {}
+    public static func route(edges: [DiagramScene.EdgeShape]) -> [[DiagramScene.Point]] {
+        edges.map { simpleRoute(from: $0.fromRect, to: $0.toRect) }
     }
 
-    /// Compute the polyline for every edge given the layout that produced
-    /// the current rects. Order preserved.
-    public static func route(
-        edges: [DiagramScene.EdgeShape],
-        config: Config = Config()
-    ) -> [[DiagramScene.Point]] {
-        // 1. Assign a target port on each rect side per edge.
-        //    - Edges going strictly up exit from the source top and enter
-        //      the target bottom (typical FK-DAG shape).
-        //    - Edges going strictly down do the reverse.
-        //    - Otherwise, route side-to-side (right→left or left→right).
-        var portsBySide: [PortKey: [PortAssignment]] = [:]
-        var descriptors: [Descriptor] = []
-        for (idx, edge) in edges.enumerated() {
-            let d = descriptorFor(edge: edge, index: idx)
-            descriptors.append(d)
-            portsBySide[PortKey(rectMinX: d.srcRect.x, rectMinY: d.srcRect.y, side: d.srcSide), default: []]
-                .append(PortAssignment(edgeIndex: idx, sortKey: d.srcSortKey))
-            portsBySide[PortKey(rectMinX: d.dstRect.x, rectMinY: d.dstRect.y, side: d.dstSide), default: []]
-                .append(PortAssignment(edgeIndex: idx, sortKey: d.dstSortKey))
-        }
-
-        // Sort each side's ports by sortKey, distribute them evenly across
-        // the middle 60 % of the rect side.
-        var portPoints: [Int: (src: DiagramScene.Point, dst: DiagramScene.Point)] = [:]
-        for (_, port) in descriptors.enumerated() {
-            portPoints[port.index] = (
-                .init(x: 0, y: 0), .init(x: 0, y: 0)  // filled below
-            )
-        }
-        func distribute(rect: DiagramScene.Rect, side: Side, count: Int, slot: Int) -> DiagramScene.Point {
-            // Fan ports across most of the side, keeping a small inset so
-            // corner rounding doesn't clip the outermost port. With 7+
-            // sibling FKs into a single "hub" table, distributing across
-            // ~85% of the side (rather than the previous ~60%) is what
-            // finally makes the ports readable.
-            let inset = min(config.portInsetFromRectCorner, min(rect.width, rect.height) / 4)
-            let usableStart: Double
-            let usableEnd: Double
-            switch side {
-            case .top, .bottom:
-                usableStart = rect.x + inset
-                usableEnd = rect.x + rect.width - inset
-            case .left, .right:
-                usableStart = rect.y + inset
-                usableEnd = rect.y + rect.height - inset
-            }
-            let step = count > 1 ? (usableEnd - usableStart) / Double(count - 1) : 0
-            let coord = count > 1 ? usableStart + step * Double(slot) : (usableStart + usableEnd) / 2
-            switch side {
-            case .top:    return .init(x: coord, y: rect.y)
-            case .bottom: return .init(x: coord, y: rect.y + rect.height)
-            case .left:   return .init(x: rect.x, y: coord)
-            case .right:  return .init(x: rect.x + rect.width, y: coord)
-            }
-        }
-        for (key, assignments) in portsBySide {
-            let sorted = assignments.sorted { $0.sortKey < $1.sortKey }
-            for (slot, assign) in sorted.enumerated() {
-                let d = descriptors[assign.edgeIndex]
-                let isSrc = (d.srcRect.x == key.rectMinX && d.srcRect.y == key.rectMinY && d.srcSide == key.side)
-                if isSrc {
-                    let p = distribute(rect: d.srcRect, side: d.srcSide, count: sorted.count, slot: slot)
-                    portPoints[assign.edgeIndex]?.src = p
-                } else {
-                    let p = distribute(rect: d.dstRect, side: d.dstSide, count: sorted.count, slot: slot)
-                    portPoints[assign.edgeIndex]?.dst = p
-                }
-            }
-        }
-
-        // 2. For each edge, walk from source port along its stub, then a
-        //    horizontal channel at a per-edge lane offset, then along the
-        //    target stub. Lane offsets are picked so that edges sharing a
-        //    channel don't lie on the same y (up-down) or x (left-right).
-        var routes: [[DiagramScene.Point]] = Array(repeating: [], count: edges.count)
-        var channelUsage: [Int: [ChannelEntry]] = [:]  // integer-quantized y (or x) → sorted lanes
-        for (idx, d) in descriptors.enumerated() {
-            guard let (src, dst) = portPoints[idx] else { continue }
-            routes[idx] = polyline(
-                src: src, dst: dst,
-                descriptor: d,
-                stub: config.stubLength,
-                laneStep: config.channelLaneStep,
-                channelUsage: &channelUsage
-            )
-        }
-        return routes
-    }
-
-    // MARK: Helpers
-
-    private enum Side: Sendable, Hashable { case top, bottom, left, right }
-
-    private struct PortKey: Hashable {
-        var rectMinX: Double; var rectMinY: Double; var side: Side
-    }
-    private struct PortAssignment {
-        var edgeIndex: Int
-        var sortKey: Double
-    }
-    private struct Descriptor {
-        var index: Int
-        var srcRect: DiagramScene.Rect
-        var dstRect: DiagramScene.Rect
-        var srcSide: Side
-        var dstSide: Side
-        var srcSortKey: Double
-        var dstSortKey: Double
-        /// Predominant direction of the edge — "up" (dst above src) vs "down"
-        /// vs "sideways". Used to pick the port faces and to lay out the
-        /// mid-channel.
-        var direction: Direction
-    }
-    private enum Direction: Sendable { case up, down, right, left }
-
-    private static func descriptorFor(edge: DiagramScene.EdgeShape, index: Int) -> Descriptor {
-        let src = edge.fromRect, dst = edge.toRect
+    private static func simpleRoute(
+        from src: DiagramScene.Rect,
+        to dst: DiagramScene.Rect
+    ) -> [DiagramScene.Point] {
         let dy = dst.midY - src.midY
         let dx = dst.midX - src.midX
-        let dir: Direction
-        let srcSide: Side, dstSide: Side
+
         if abs(dy) >= abs(dx) {
-            if dy < 0 { dir = .up;   srcSide = .top;    dstSide = .bottom }
-            else      { dir = .down; srcSide = .bottom; dstSide = .top }
+            // Predominantly vertical — the FK-DAG common case.
+            let goingDown = dy > 0
+            let srcY = goingDown ? src.y + src.height : src.y
+            let dstY = goingDown ? dst.y : dst.y + dst.height
+            let srcPort = DiagramScene.Point(x: src.midX, y: srcY)
+            let dstPort = DiagramScene.Point(x: dst.midX, y: dstY)
+            if abs(src.midX - dst.midX) < 1 {
+                // Aligned columns → single vertical segment.
+                return [srcPort, dstPort]
+            }
+            let midY = (srcY + dstY) / 2
+            return [
+                srcPort,
+                DiagramScene.Point(x: srcPort.x, y: midY),
+                DiagramScene.Point(x: dstPort.x, y: midY),
+                dstPort,
+            ]
         } else {
-            if dx > 0 { dir = .right; srcSide = .right; dstSide = .left }
-            else      { dir = .left;  srcSide = .left;  dstSide = .right }
-        }
-        // Sort key so ports fan out in the direction of travel (leftmost
-        // target x picks the leftmost port on the source top, etc.).
-        let srcKey: Double = (dir == .up || dir == .down) ? dst.midX : dst.midY
-        let dstKey: Double = (dir == .up || dir == .down) ? src.midX : src.midY
-        return Descriptor(
-            index: index,
-            srcRect: src, dstRect: dst,
-            srcSide: srcSide, dstSide: dstSide,
-            srcSortKey: srcKey, dstSortKey: dstKey,
-            direction: dir
-        )
-    }
-
-    private struct ChannelEntry: Hashable {
-        var edgeIndex: Int
-        var lane: Int
-    }
-
-    private static func polyline(
-        src: DiagramScene.Point,
-        dst: DiagramScene.Point,
-        descriptor d: Descriptor,
-        stub: Double,
-        laneStep: Double,
-        channelUsage: inout [Int: [ChannelEntry]]
-    ) -> [DiagramScene.Point] {
-        // Compute the raw path first, then bin the channel y (or x) so we
-        // can offset duplicates onto separate lanes.
-        switch d.direction {
-        case .up:
-            // src port sits on src.top, dst port sits on dst.bottom.
-            let stub1 = DiagramScene.Point(x: src.x, y: src.y - stub)
-            let stub2 = DiagramScene.Point(x: dst.x, y: dst.y + stub)
-            let midYRaw = (stub1.y + stub2.y) / 2
-            let (midY, _) = pickLane(dimension: midYRaw, group: d.index,
-                                     usage: &channelUsage, laneStep: laneStep)
+            // Predominantly horizontal.
+            let goingRight = dx > 0
+            let srcX = goingRight ? src.x + src.width : src.x
+            let dstX = goingRight ? dst.x : dst.x + dst.width
+            let srcPort = DiagramScene.Point(x: srcX, y: src.midY)
+            let dstPort = DiagramScene.Point(x: dstX, y: dst.midY)
+            if abs(src.midY - dst.midY) < 1 {
+                return [srcPort, dstPort]
+            }
+            let midX = (srcX + dstX) / 2
             return [
-                src,
-                stub1,
-                DiagramScene.Point(x: stub1.x, y: midY),
-                DiagramScene.Point(x: stub2.x, y: midY),
-                stub2,
-                dst,
-            ]
-        case .down:
-            let stub1 = DiagramScene.Point(x: src.x, y: src.y + stub)
-            let stub2 = DiagramScene.Point(x: dst.x, y: dst.y - stub)
-            let midYRaw = (stub1.y + stub2.y) / 2
-            let (midY, _) = pickLane(dimension: midYRaw, group: d.index,
-                                     usage: &channelUsage, laneStep: laneStep)
-            return [
-                src,
-                stub1,
-                DiagramScene.Point(x: stub1.x, y: midY),
-                DiagramScene.Point(x: stub2.x, y: midY),
-                stub2,
-                dst,
-            ]
-        case .right:
-            let stub1 = DiagramScene.Point(x: src.x + stub, y: src.y)
-            let stub2 = DiagramScene.Point(x: dst.x - stub, y: dst.y)
-            let midXRaw = (stub1.x + stub2.x) / 2
-            let (midX, _) = pickLane(dimension: midXRaw, group: d.index,
-                                     usage: &channelUsage, laneStep: laneStep)
-            return [
-                src,
-                stub1,
-                DiagramScene.Point(x: midX, y: stub1.y),
-                DiagramScene.Point(x: midX, y: stub2.y),
-                stub2,
-                dst,
-            ]
-        case .left:
-            let stub1 = DiagramScene.Point(x: src.x - stub, y: src.y)
-            let stub2 = DiagramScene.Point(x: dst.x + stub, y: dst.y)
-            let midXRaw = (stub1.x + stub2.x) / 2
-            let (midX, _) = pickLane(dimension: midXRaw, group: d.index,
-                                     usage: &channelUsage, laneStep: laneStep)
-            return [
-                src,
-                stub1,
-                DiagramScene.Point(x: midX, y: stub1.y),
-                DiagramScene.Point(x: midX, y: stub2.y),
-                stub2,
-                dst,
+                srcPort,
+                DiagramScene.Point(x: midX, y: srcPort.y),
+                DiagramScene.Point(x: midX, y: dstPort.y),
+                dstPort,
             ]
         }
-    }
-
-    /// Quantize the raw channel coordinate to a 24-pt bin and hand out a
-    /// zig-zagging lane offset so co-located edges don't overlap.
-    private static func pickLane(
-        dimension raw: Double,
-        group: Int,
-        usage: inout [Int: [ChannelEntry]],
-        laneStep: Double
-    ) -> (adjusted: Double, lane: Int) {
-        let bin = Int((raw / 24).rounded())
-        let existing = usage[bin] ?? []
-        // Pick the lowest unused lane: 0, +1, -1, +2, -2, ...
-        var lane = 0
-        let usedLanes = Set(existing.map(\.lane))
-        while usedLanes.contains(lane) {
-            lane = lane >= 0 ? -(lane + 1) : -lane
-        }
-        usage[bin, default: []].append(ChannelEntry(edgeIndex: group, lane: lane))
-        return (raw + Double(lane) * laneStep, lane)
     }
 }

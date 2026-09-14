@@ -71,7 +71,7 @@ public enum RasterExporter {
         let bx1 = scene.nodes.map { $0.rect.x + $0.rect.width }.max() ?? 0
         for edge in scene.edges {
             if !edge.waypoints.isEmpty {
-                strokeRoundedPolyline(edge.waypoints, radius: 8, in: ctx)
+                strokeSharpPolyline(edge.waypoints, in: ctx)
             } else {
                 let a = edge.fromRect.borderPoint(toward: (edge.toRect.midX, edge.toRect.midY))
                 let b = edge.toRect.borderPoint(toward: (edge.fromRect.midX, edge.fromRect.midY))
@@ -120,6 +120,14 @@ public enum RasterExporter {
                 y += 16
             }
         }
+    }
+
+    private static func strokeSharpPolyline(_ pts: [DiagramScene.Point], in ctx: CGContext) {
+        guard pts.count >= 2 else { return }
+        ctx.beginPath()
+        ctx.move(to: CGPoint(x: pts[0].x, y: pts[0].y))
+        for i in 1..<pts.count { ctx.addLine(to: CGPoint(x: pts[i].x, y: pts[i].y)) }
+        ctx.strokePath()
     }
 
     private static func strokeRoundedPolyline(_ pts: [DiagramScene.Point], radius: CGFloat, in ctx: CGContext) {

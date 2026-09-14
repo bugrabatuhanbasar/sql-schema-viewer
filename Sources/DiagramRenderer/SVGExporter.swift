@@ -29,8 +29,9 @@ public enum SVGExporter {
             let lastDir: (x: Double, y: Double)
             if !edge.waypoints.isEmpty {
                 let pts = edge.waypoints
-                let d = roundedPolylinePathData(points: pts, radius: 8)
-                out.append(#"<path d="\#(d)" fill="none" stroke="\#(style.edgeColor)" stroke-width="1.3"/>"#)
+                var d = "M \(pts[0].x) \(pts[0].y)"
+                for i in 1..<pts.count { d += " L \(pts[i].x) \(pts[i].y)" }
+                out.append(#"<path d="\#(d)" fill="none" stroke="\#(style.edgeColor)" stroke-width="1.3" stroke-linejoin="miter"/>"#)
                 firstPoint = (pts[0].x, pts[0].y)
                 lastPoint  = (pts[pts.count - 1].x, pts[pts.count - 1].y)
                 firstDir = unit(from: pts[0], to: pts[1])

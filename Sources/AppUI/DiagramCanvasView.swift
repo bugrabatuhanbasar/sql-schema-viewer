@@ -121,28 +121,29 @@ final class DiagramCanvasNSView: NSView {
 
     /// Live orthogonal waypoints for the given edge. Static waypoints are
     /// baked at scene-build time in the un-dragged coordinate space; here
-    /// we re-shift the endpoints (and their immediate stubs) to follow the
-    /// current node offsets so an orthogonal edge stays glued to its
+    /// we re-shift the endpoints so an orthogonal edge stays glued to its
     /// source and target while the user drags either one.
+    ///
+    /// Split rule: the first half of the polyline follows the source's
+    /// live rect, the second half follows the target's. This gives a
+    /// clean split for both 4-point Z-shapes (2 source-side, 2 target-side)
+    /// and the 2-point straight lines (1 each).
     private func liveOrthogonalPath(for edge: DiagramScene.EdgeShape) -> [CGPoint]? {
         guard !edge.waypoints.isEmpty,
               let fromRect = liveRect(forTitle: edge.fromTitle),
               let toRect = liveRect(forTitle: edge.toTitle) else { return nil }
-        // The baked path was computed on the un-offset source/target rects.
-        // Translate its first two vertices by the source drag offset and
-        // last two vertices by the target drag offset. The middle vertices
-        // sit in the channel and stay in place — matching how professional
-        // ERD tools behave (only the leg attached to a moving node moves).
         let fromDX = fromRect.midX - CGFloat(edge.fromRect.midX)
         let fromDY = fromRect.midY - CGFloat(edge.fromRect.midY)
         let toDX = toRect.midX - CGFloat(edge.toRect.midX)
         let toDY = toRect.midY - CGFloat(edge.toRect.midY)
+        let n = edge.waypoints.count
+        let mid = n / 2
         var pts: [CGPoint] = []
+        pts.reserveCapacity(n)
         for (i, wp) in edge.waypoints.enumerated() {
-            let isSourceLeg = i < 2
-            let isTargetLeg = i >= edge.waypoints.count - 2
-            let dx: CGFloat = isSourceLeg ? fromDX : (isTargetLeg ? toDX : 0)
-            let dy: CGFloat = isSourceLeg ? fromDY : (isTargetLeg ? toDY : 0)
+            let source = i < mid
+            let dx = source ? fromDX : toDX
+            let dy = source ? fromDY : toDY
             pts.append(CGPoint(x: CGFloat(wp.x) + dx + contentPadding,
                                y: CGFloat(wp.y) + dy + contentPadding))
         }
@@ -216,6 +217,14 @@ final class DiagramCanvasNSView: NSView {
             }
         }
         return best?.index
+    }
+
+    private func strokeSharpPolyline(_ pts: [CGPoint], in ctx: CGContext) {
+        guard pts.count >= 2 else { return }
+        ctx.beginPath()
+        ctx.move(to: pts[0])
+        for i in 1..<pts.count { ctx.addLine(to: pts[i]) }
+        ctx.strokePath()
     }
 
     private func strokeRoundedPolyline(_ pts: [CGPoint], radius: CGFloat, in ctx: CGContext) {
@@ -304,10 +313,10 @@ final class DiagramCanvasNSView: NSView {
                 if isSelected {
                     ctx.setStrokeColor(accent.copy(alpha: 0.25)!)
                     ctx.setLineWidth(5)
-                    strokeRoundedPolyline(poly, radius: 8, in: ctx)
+                    strokeSharpPolyline(poly, in: ctx)
                 }
                 ctx.setStrokeColor(strokeColor); ctx.setLineWidth(strokeWidth)
-                strokeRoundedPolyline(poly, radius: 8, in: ctx)
+                strokeSharpPolyline(poly, in: ctx)
                 firstPoint = poly[0]
                 lastPoint  = poly[poly.count - 1]
                 entryDir   = normalize(from: poly[0], to: poly[1])
