@@ -21,20 +21,43 @@ public struct LayoutResult: Sendable {
     }
 }
 
-/// Layered layout for foreign-key DAGs. Nodes with no incoming FKs go in
-/// layer 0; each remaining node's layer is 1 + max(parent layers). Cycles
-/// are broken by placing back-edge targets one layer below their referrer.
-/// Node heights account for column counts so long tables don't overlap.
+/// Layered layout for FK DAGs.
+///
+/// # Design goals
+///
+/// After a long series of edge-routing patches failed to un-stack edges on
+/// hub tables, we redesigned the placement pass itself. The rules are:
+///
+/// 1. **Uniform grid inside a layer.** Tables in the same layer sit on
+///    fixed column x's — no barycenter attraction. Barycenter looked
+///    tidier for tiny schemas but on real schemas it pulled multiple
+///    children of a hub onto near-identical x's, which then made every
+///    downstream edge fan out from the same pixel. Uniform grid keeps
+///    them well separated.
+///
+/// 2. **Alphabetical ordering inside a layer.** Deterministic and readable
+///    — users always find `posts` before `users` on the same row.
+///
+/// 3. **Dynamic vertical gap per layer transition.** The gap between two
+///    adjacent layers grows with the number of edges that cross it. If 12
+///    edges cross the gap between layer 1 and layer 2, we allocate
+///    `baseGap + 12 * laneStep` pt so the orthogonal router has room to
+///    stack every edge on its own horizontal rail without them piling up.
+///
+/// 4. **Generous outer padding.** The whole diagram sits inside a padded
+///    frame so the router can safely arc a long-span edge around the
+///    outside without clipping the frame.
 public enum LayoutEngine {
 
-    /// Public entrypoint. Uses layered layout by default.
     public static func layout(
         _ schema: Schema,
         nodeWidth: Double = 260,
         rowHeight: Double = 18,
         headerHeight: Double = 34,
-        horizontalGap: Double = 110,
-        verticalGap: Double = 140
+        horizontalGap: Double = 140,
+        baseVerticalGap: Double = 120,
+        laneStep: Double = 22,
+        outerPadding: Double = 200
     ) -> LayoutResult {
         layered(
             schema,
@@ -42,7 +65,9 @@ public enum LayoutEngine {
             rowHeight: rowHeight,
             headerHeight: headerHeight,
             horizontalGap: horizontalGap,
-            verticalGap: verticalGap
+            baseVerticalGap: baseVerticalGap,
+            laneStep: laneStep,
+            outerPadding: outerPadding
         )
     }
 
@@ -51,12 +76,15 @@ public enum LayoutEngine {
         nodeWidth: Double = 260,
         rowHeight: Double = 18,
         headerHeight: Double = 34,
-        horizontalGap: Double = 110,
-        verticalGap: Double = 140
+        horizontalGap: Double = 140,
+        baseVerticalGap: Double = 120,
+        laneStep: Double = 22,
+        outerPadding: Double = 200
     ) -> LayoutResult {
         let names = schema.tables.keys.sorted { $0.normalized < $1.normalized }
         if names.isEmpty { return LayoutResult() }
 
+        // Adjacency (parents) for longest-path layering.
         var parents: [Identifier: Set<Identifier>] = [:]
         for id in names { parents[id] = [] }
         for (_, table) in schema.tables {
@@ -67,8 +95,7 @@ public enum LayoutEngine {
             }
         }
 
-        // Longest-path layering with cycle tolerance: iterate until a stable
-        // assignment or a bounded number of passes.
+        // Longest-path layering with cycle tolerance.
         var layer: [Identifier: Int] = Dictionary(uniqueKeysWithValues: names.map { ($0, 0) })
         let maxIterations = max(4, names.count)
         for _ in 0..<maxIterations {
@@ -83,111 +110,99 @@ public enum LayoutEngine {
             }
             if !changed { break }
         }
-
         var groups: [Int: [Identifier]] = [:]
         for id in names { groups[layer[id]!, default: []].append(id) }
-        let layers = groups.keys.sorted()
+        let layerKeys = groups.keys.sorted()
 
-        // Order nodes within each layer using a median heuristic over the
-        // previous layer's positions (classic Sugiyama step). This dramatically
-        // cuts edge crossings vs. an alphabetical order: children sit close
-        // to the horizontal position of their parents, so an edge from A
-        // (layer N) to B (layer N+1) tends to run near-straight instead of
-        // sweeping across other nodes on the way down.
-        // Build per-layer ordering + geometry. Positions are assigned as we
-        // go, so each layer's node targets the barycenter of its parents'
-        // *actual* x positions in previous layers — a lightweight Sugiyama
-        // coordinate-assignment. Overlap is prevented by sweeping left to
-        // right with a minimum step of nodeWidth + horizontalGap.
-        var perLayerIds: [[Identifier]] = []
-        var perLayerHeights: [[Double]] = []
-        var perLayerXs: [[Double]] = []
-        var xByName: [Identifier: Double] = [:]
+        // Each layer: alphabetical ordering, uniform grid across a shared
+        // column pitch. All layers use the SAME column pitch so children
+        // and grandparents line up visually.
+        let columnPitch = nodeWidth + horizontalGap
+        // Widest layer sets the total column count.
+        let maxLayerCount = layerKeys.map { groups[$0]!.count }.max() ?? 1
+        let totalContentWidth = Double(maxLayerCount) * nodeWidth
+            + Double(max(maxLayerCount - 1, 0)) * horizontalGap
 
         func height(of id: Identifier) -> Double {
             let cols = schema.tables[id]?.columns.count ?? 0
             return headerHeight + Double(max(cols, 1)) * rowHeight
         }
 
-        for (li, l) in layers.enumerated() {
-            var ids = groups[l]!
-
-            if li == 0 {
-                // Root layer: alphabetical, laid out left-to-right from 0.
-                ids.sort { $0.normalized < $1.normalized }
-                var xs: [Double] = []
-                var x: Double = 0
-                for _ in ids { xs.append(x); x += nodeWidth + horizontalGap }
-                for (i, id) in ids.enumerated() { xByName[id] = xs[i] }
-                perLayerIds.append(ids)
-                perLayerHeights.append(ids.map(height))
-                perLayerXs.append(xs)
-                continue
-            }
-
-            // Later layers: compute each node's target x = barycenter of its
-            // parents' xByName, then pack left-to-right in target order.
-            var targets: [(id: Identifier, target: Double)] = ids.map { id in
-                let pxs = (parents[id] ?? []).compactMap { xByName[$0] }
-                let t = pxs.isEmpty ? .greatestFiniteMagnitude : pxs.reduce(0, +) / Double(pxs.count)
-                return (id, t)
-            }
-            // Sort by target, then alphabetical for ties.
-            targets.sort {
-                if $0.target != $1.target { return $0.target < $1.target }
-                return $0.id.normalized < $1.id.normalized
-            }
-            var xs: [Double] = Array(repeating: 0, count: targets.count)
-            var prevRight = -Double.infinity
-            for (i, pair) in targets.enumerated() {
-                let x = max(pair.target, prevRight + horizontalGap)
-                xs[i] = x
-                prevRight = x + nodeWidth
-            }
-            ids = targets.map(\.id)
-            for (i, id) in ids.enumerated() { xByName[id] = xs[i] }
+        // Pre-compute per-layer arrays.
+        var perLayerIds: [[Identifier]] = []
+        var perLayerHeights: [[Double]] = []
+        for l in layerKeys {
+            let ids = groups[l]!.sorted { $0.normalized < $1.normalized }
             perLayerIds.append(ids)
             perLayerHeights.append(ids.map(height))
-            perLayerXs.append(xs)
         }
 
-        // Global left-align so every layer starts at x=0 (avoid negative x
-        // if the barycenter pass pushed a layer left of the roots).
-        let minX = perLayerXs.flatMap { $0 }.min() ?? 0
-        if minX < 0 {
-            let shift = -minX
-            for li in perLayerXs.indices {
-                for i in perLayerXs[li].indices { perLayerXs[li][i] += shift }
+        // Count edges crossing each layer boundary — used to widen the
+        // vertical gap dynamically so the orthogonal router has enough
+        // horizontal rails to unpack every parallel edge.
+        //
+        // Each FK contributes to every gap between its source layer and
+        // target layer. A short-hop parent→child crosses one gap; a
+        // Layer 3 → Layer 0 edge crosses three.
+        var idToLayer: [Identifier: Int] = [:]
+        for (li, ids) in perLayerIds.enumerated() {
+            for id in ids { idToLayer[id] = li }
+        }
+        var edgesAcrossGap: [Int: Int] = [:]
+        for (_, table) in schema.tables {
+            guard let srcLayer = idToLayer[table.name] else { continue }
+            for fk in table.foreignKeys {
+                guard let dstLayer = idToLayer[fk.referencedTable] else { continue }
+                let lo = min(srcLayer, dstLayer)
+                let hi = max(srcLayer, dstLayer)
+                if lo == hi { continue }
+                for g in lo..<hi { edgesAcrossGap[g, default: 0] += 1 }
             }
-            for (name, x) in xByName { xByName[name] = x + shift }
         }
 
-        // Compute overall content width from the rightmost node right edge.
-        var maxRight: Double = 0
-        for li in perLayerXs.indices {
-            for x in perLayerXs[li] { maxRight = max(maxRight, x + nodeWidth) }
-        }
-
+        // Place nodes. Each layer gets its own y = previous.y + previous
+        // rowHeight + gapBetween(previousLayer, thisLayer).
         var positions: [NodePosition] = []
-        var y: Double = 0
+        var y: Double = outerPadding
+        var maxRight: Double = 0
         for (li, ids) in perLayerIds.enumerated() {
             let heights = perLayerHeights[li]
-            let xs = perLayerXs[li]
             let rowHeightMax = heights.max() ?? headerHeight
-            for (idx, id) in ids.enumerated() {
-                let h = heights[idx]
+
+            // Centre the row within the total content width by using half
+            // of the leftover space as the starting x. Even for the widest
+            // layer this leaves a 0-pt margin; narrower layers land nicely
+            // centred within the diagram frame.
+            let layerRowWidth = Double(ids.count) * nodeWidth
+                + Double(max(ids.count - 1, 0)) * horizontalGap
+            let rowLeft = outerPadding + (totalContentWidth - layerRowWidth) / 2
+
+            var x = rowLeft
+            for (i, id) in ids.enumerated() {
+                let h = heights[i]
                 let rowY = y + (rowHeightMax - h) / 2
                 positions.append(NodePosition(
-                    node: id, x: xs[idx], y: rowY,
+                    node: id, x: x, y: rowY,
                     width: nodeWidth, height: h
                 ))
+                x += columnPitch
+                maxRight = max(maxRight, x - horizontalGap)
             }
-            y += rowHeightMax + verticalGap
+            // Move down to the next layer.
+            if li < perLayerIds.count - 1 {
+                let crossing = edgesAcrossGap[li] ?? 0
+                let dynamicGap = baseVerticalGap + Double(crossing) * laneStep
+                y += rowHeightMax + dynamicGap
+            } else {
+                y += rowHeightMax
+            }
         }
+
+        let contentWidth = maxRight + outerPadding
+        let contentHeight = y + outerPadding
         return LayoutResult(
             positions: positions,
-            contentSize: (max(maxRight, nodeWidth), max(y - verticalGap, headerHeight))
+            contentSize: (contentWidth, contentHeight)
         )
     }
 }
-

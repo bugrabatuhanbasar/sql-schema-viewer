@@ -685,14 +685,25 @@ public struct DiagramCanvasView: NSViewRepresentable {
     }
 }
 
-/// NSScrollView subclass that keeps the document view centered inside the
-/// clip view when the content is smaller than the visible area, matching
-/// what most macOS diagram viewers do (Preview, Xcode's storyboard editor).
+/// NSScrollView subclass that centres the document view inside the clip
+/// view regardless of size:
+///   - Content smaller than visible area: content sits in the middle
+///   - Content larger: initial scroll position is centred (not top-left)
+///   - Zoom out: content stays centred as it shrinks
+///
+/// Matches Preview / Xcode's storyboard editor behaviour.
 final class CenteringScrollView: NSScrollView {
+    private var didInitialCenter = false
+
     override func tile() {
         super.tile()
         recenterIfNeeded()
+        if !didInitialCenter, let doc = documentView, doc.frame.size.width > 0 {
+            scrollToCentre()
+            didInitialCenter = true
+        }
     }
+
     func recenterIfNeeded() {
         guard let doc = documentView else { return }
         let clipSize = contentView.bounds.size
@@ -709,6 +720,18 @@ final class CenteringScrollView: NSScrollView {
             origin.y = 0
         }
         doc.frame = CGRect(origin: origin, size: docSize)
+    }
+
+    /// Centre the *scroll offset* so a large diagram opens with its middle
+    /// visible instead of the top-left corner.
+    func scrollToCentre() {
+        guard let doc = documentView else { return }
+        let clipSize = contentView.bounds.size
+        let docSize = doc.frame.size
+        let x = max(0, (docSize.width - clipSize.width) / 2)
+        let y = max(0, (docSize.height - clipSize.height) / 2)
+        contentView.scroll(to: NSPoint(x: x, y: y))
+        reflectScrolledClipView(contentView)
     }
 }
 
