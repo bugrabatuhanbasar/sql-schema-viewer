@@ -17,12 +17,20 @@ final class DiagramCanvasNSView: NSView {
             if scene.nodes.count != oldValue.nodes.count {
                 nodeOffsets.removeAll()
             }
+            // Edge indices are only valid within a given scene.
+            selectedEdgeIndex = nil
             invalidateIntrinsicContentSize()
             needsDisplay = true
         }
     }
     var selectedNodes: Set<Identifier> = [] {
-        didSet { needsDisplay = true }
+        didSet {
+            // Any change to the node selection clears the visual edge
+            // highlight — otherwise the accent line lingers after the
+            // user picks something else.
+            if selectedNodes != oldValue { selectedEdgeIndex = nil }
+            needsDisplay = true
+        }
     }
     var highlightedNodes: Set<Identifier> = [] {
         didSet { needsDisplay = true }
@@ -36,6 +44,12 @@ final class DiagramCanvasNSView: NSView {
     private var dragStartOffsets: [String: CGPoint] = [:]
     private var marqueeAnchor: NSPoint?
     private var marqueeCurrent: NSPoint?
+    /// Index into `scene.edges` for the edge currently highlighted after
+    /// an edge-click. Reset whenever the scene changes shape or the node
+    /// selection changes, so the highlight tracks the most recent action.
+    private var selectedEdgeIndex: Int? {
+        didSet { needsDisplay = true }
+    }
     private let contentPadding: CGFloat = 40
 
     override var isFlipped: Bool { true }
@@ -98,6 +112,68 @@ final class DiagramCanvasNSView: NSView {
         return CGPoint(x: cx + dx * s, y: cy + dy * s)
     }
 
+    /// Compute the four control points for an edge's cubic bezier given the
+    /// current live rects and the same detour logic as drawing. Returns
+    /// nil if either endpoint's rect can't be found.
+    private struct BezierGeom { var a, c1, c2, b: CGPoint }
+    private func bezier(for edge: DiagramScene.EdgeShape, diagramBounds: (Double, Double)) -> BezierGeom? {
+        guard let fromRect = liveRect(forTitle: edge.fromTitle),
+              let toRect = liveRect(forTitle: edge.toTitle) else { return nil }
+        let a = borderPoint(from: fromRect, toward: (toRect.midX, toRect.midY))
+        let b = borderPoint(from: toRect, toward: (fromRect.midX, fromRect.midY))
+        let (bx0, bx1) = diagramBounds
+        let c1: CGPoint, c2: CGPoint
+        if edge.isLongSpan {
+            let bothLeftHalf = (a.x + b.x) / 2 < (bx0 + bx1) / 2
+            let detourX: CGFloat = bothLeftHalf ? CGFloat(bx0) - 60 : CGFloat(bx1) + 60
+            c1 = CGPoint(x: detourX, y: a.y)
+            c2 = CGPoint(x: detourX, y: b.y)
+        } else {
+            let midX = (a.x + b.x) / 2
+            c1 = CGPoint(x: midX, y: a.y)
+            c2 = CGPoint(x: midX, y: b.y)
+        }
+        return BezierGeom(a: a, c1: c1, c2: c2, b: b)
+    }
+
+    private static func evalBezier(_ g: BezierGeom, at t: CGFloat) -> CGPoint {
+        let u = 1 - t
+        let x = u*u*u*g.a.x + 3*u*u*t*g.c1.x + 3*u*t*t*g.c2.x + t*t*t*g.b.x
+        let y = u*u*u*g.a.y + 3*u*u*t*g.c1.y + 3*u*t*t*g.c2.y + t*t*t*g.b.y
+        return CGPoint(x: x, y: y)
+    }
+
+    /// Diagram content bounds (min x, max x) used by the detour router.
+    private func currentDiagramBounds() -> (Double, Double) {
+        let allRects = scene.nodes.compactMap { liveRect(forTitle: $0.title) }
+        let bx0 = allRects.map(\.minX).min() ?? 0
+        let bx1 = allRects.map(\.maxX).max() ?? 0
+        return (Double(bx0), Double(bx1))
+    }
+
+    /// Nearest edge under a point, or nil if none is within `tolerance` px.
+    private func edgeAt(_ point: NSPoint, tolerance: CGFloat = 7) -> Int? {
+        let bounds = currentDiagramBounds()
+        var best: (index: Int, dist: CGFloat)? = nil
+        for (idx, edge) in scene.edges.enumerated() {
+            guard let g = bezier(for: edge, diagramBounds: bounds) else { continue }
+            var minD: CGFloat = .infinity
+            // Sample the bezier at 32 segments and take the nearest point.
+            let steps = 32
+            for k in 0...steps {
+                let t = CGFloat(k) / CGFloat(steps)
+                let p = Self.evalBezier(g, at: t)
+                let dx = point.x - p.x, dy = point.y - p.y
+                let d = sqrt(dx * dx + dy * dy)
+                if d < minD { minD = d }
+            }
+            if minD <= tolerance {
+                if best == nil || minD < best!.dist { best = (idx, minD) }
+            }
+        }
+        return best?.index
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let dark = NSAppearance.currentDrawing().isDarkMode
@@ -109,47 +185,40 @@ final class DiagramCanvasNSView: NSView {
 
         // Edges — routed from node border to node border, live-updated
         // through node titles so dragging follows immediately.
-        ctx.setLineWidth(1.3)
         let edgeColor = dark
             ? CGColor(gray: 0.70, alpha: 0.85)
             : CGColor(gray: 0.30, alpha: 0.85)
-        ctx.setStrokeColor(edgeColor)
-        // Bounds of ALL live rects — long-span edges use these to detour
-        // around the diagram instead of crossing intermediate tables.
-        let allRects = scene.nodes.compactMap { liveRect(forTitle: $0.title) }
-        let bx0 = allRects.map(\.minX).min() ?? 0
-        let bx1 = allRects.map(\.maxX).max() ?? 0
-        for edge in scene.edges {
-            guard let fromRect = liveRect(forTitle: edge.fromTitle),
-                  let toRect = liveRect(forTitle: edge.toTitle) else { continue }
-            let a = borderPoint(from: fromRect, toward: (toRect.midX, toRect.midY))
-            let b = borderPoint(from: toRect, toward: (fromRect.midX, fromRect.midY))
-
-            let c1: CGPoint, c2: CGPoint
-            if edge.isLongSpan {
-                // Detour: route control points OUTSIDE the diagram bounds on
-                // the side closer to both endpoints. This makes the bezier
-                // sweep around the intermediate tables.
-                let bothLeftHalf = (a.x + b.x) / 2 < (bx0 + bx1) / 2
-                let detourX: CGFloat = bothLeftHalf ? (bx0 - 60) : (bx1 + 60)
-                c1 = CGPoint(x: detourX, y: a.y)
-                c2 = CGPoint(x: detourX, y: b.y)
+        let accent = CGColor(red: 0.20, green: 0.55, blue: 0.95, alpha: 1)
+        let bounds = currentDiagramBounds()
+        for (idx, edge) in scene.edges.enumerated() {
+            guard let g = bezier(for: edge, diagramBounds: bounds) else { continue }
+            let isSelected = (selectedEdgeIndex == idx)
+            if isSelected {
+                // Halo behind the accent stroke so the highlight reads on
+                // both light and dark canvases.
+                ctx.setLineWidth(5)
+                ctx.setStrokeColor(accent.copy(alpha: 0.25)!)
+                ctx.beginPath()
+                ctx.move(to: g.a)
+                ctx.addCurve(to: g.b, control1: g.c1, control2: g.c2)
+                ctx.strokePath()
+                ctx.setLineWidth(2.4)
+                ctx.setStrokeColor(accent)
             } else {
-                let midX = (a.x + b.x) / 2
-                c1 = CGPoint(x: midX, y: a.y)
-                c2 = CGPoint(x: midX, y: b.y)
+                ctx.setLineWidth(1.3)
+                ctx.setStrokeColor(edgeColor)
             }
             ctx.beginPath()
-            ctx.move(to: a)
-            ctx.addCurve(to: b, control1: c1, control2: c2)
+            ctx.move(to: g.a)
+            ctx.addCurve(to: g.b, control1: g.c1, control2: g.c2)
             ctx.strokePath()
 
             // Cardinality label — 18pt OUTSIDE the node border, along the edge.
-            let dx = b.x - a.x, dy = b.y - a.y
+            let dx = g.b.x - g.a.x, dy = g.b.y - g.a.y
             let len = max(1, sqrt(dx * dx + dy * dy))
             let ux = dx / len, uy = dy / len
-            let fromLabelPoint = CGPoint(x: a.x + ux * 18, y: a.y + uy * 18)
-            let toLabelPoint = CGPoint(x: b.x - ux * 18, y: b.y - uy * 18)
+            let fromLabelPoint = CGPoint(x: g.a.x + ux * 18, y: g.a.y + uy * 18)
+            let toLabelPoint = CGPoint(x: g.b.x - ux * 18, y: g.b.y - uy * 18)
             drawCardinalityLabel(edge.fromCardinality, at: fromLabelPoint, in: ctx, dark: dark)
             drawCardinalityLabel(edge.toCardinality,   at: toLabelPoint,   in: ctx, dark: dark)
         }
@@ -305,6 +374,18 @@ final class DiagramCanvasNSView: NSView {
                 dragStartOffsets[title] = nodeOffsets[title] ?? .zero
             }
             NSCursor.closedHand.push()
+        } else if let edgeIdx = edgeAt(point) {
+            // Clicked on (or near) an edge line — highlight the edge and
+            // select both endpoint tables. This gives users a fast way to
+            // ask "what does this line connect?" and pulls both tables
+            // into the details-panel summary.
+            let edge = scene.edges[edgeIdx]
+            let a = Identifier(raw: edge.fromTitle)
+            let b = Identifier(raw: edge.toTitle)
+            let target: Set<Identifier> = [a, b]
+            selectedNodes = isMultiSelectModifier(event) ? selectedNodes.union(target) : target
+            selectedEdgeIndex = edgeIdx
+            onSelectionChanged(selectedNodes)
         } else {
             // Empty canvas — either clear selection or begin marquee.
             if !isMultiSelectModifier(event) {
@@ -371,15 +452,41 @@ final class DiagramCanvasNSView: NSView {
     // MARK: keyboard
 
     override func keyDown(with event: NSEvent) {
-        // Escape clears selection.
+        // Escape clears both node and edge selection.
         if event.keyCode == 53 { // kVK_Escape
             if !selectedNodes.isEmpty {
                 selectedNodes.removeAll()
                 onSelectionChanged(selectedNodes)
             }
+            selectedEdgeIndex = nil
             return
         }
         super.keyDown(with: event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        // Pointer changes to a crosshair when it hovers near a clickable
+        // edge line, matching macOS conventions for "there's something to
+        // click here".
+        let p = convert(event.locationInWindow, from: nil)
+        if nodeAt(p) == nil, edgeAt(p) != nil {
+            NSCursor.crosshair.set()
+        } else if nodeAt(p) == nil {
+            NSCursor.arrow.set()
+        }
+        super.mouseMoved(with: event)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
     }
 
     @objc override func selectAll(_ sender: Any?) {
