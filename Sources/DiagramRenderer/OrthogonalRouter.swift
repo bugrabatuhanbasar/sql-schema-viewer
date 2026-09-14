@@ -115,17 +115,73 @@ public enum OrthogonalRouter {
             let bx1 = allNodes.map { $0.rect.x + $0.rect.width }.max() ?? 0
             let by0 = allNodes.map(\.rect.y).min() ?? 0
             let by1 = allNodes.map { $0.rect.y + $0.rect.height }.max() ?? 0
+
+            // First pass: find edges that need a detour and record their
+            // preferred outer side. Group them by (source face, outer side)
+            // so we can hand each edge a distinct lane along the outer
+            // channel.
+            struct DetourNeed { var edgeIndex: Int; var srcSide: Side; var goingLeft: Bool; var goingUp: Bool }
+            var needs: [DetourNeed] = []
             for (idx, route) in routes.enumerated() {
                 let f = faces[idx]
                 if routeCollidesWithNodes(route, allNodes: allNodes, exclude: [f.srcRect, f.dstRect]) {
-                    routes[idx] = detourPolyline(
-                        src: route[0], dst: route[route.count - 1],
-                        srcSide: f.srcSide,
-                        bx0: bx0, bx1: bx1, by0: by0, by1: by1,
-                        clearance: config.detourClearance,
-                        stub: config.detourStub
-                    )
+                    let midX = (route[0].x + route[route.count - 1].x) / 2
+                    let midY = (route[0].y + route[route.count - 1].y) / 2
+                    needs.append(DetourNeed(
+                        edgeIndex: idx, srcSide: f.srcSide,
+                        goingLeft: midX - bx0 < bx1 - midX,
+                        goingUp:   midY - by0 < by1 - midY
+                    ))
                 }
+            }
+
+            // Group by (outer side used, i.e. left vs right vs up vs down)
+            // — every group shares an outer channel and gets slots 0, 1,
+            // 2… spread by `laneSpread` so parallel detours end up on
+            // distinct rails instead of stacking on the same x (or y).
+            struct GroupKey: Hashable { var horizontalOuter: Bool; var positive: Bool }
+            var groupIds: [GroupKey: [Int]] = [:]
+            for (i, n) in needs.enumerated() {
+                let horizontalOuter: Bool
+                let positive: Bool
+                switch n.srcSide {
+                case .top, .bottom:
+                    horizontalOuter = true
+                    positive = !n.goingLeft    // true = right outer, false = left
+                case .left, .right:
+                    horizontalOuter = false
+                    positive = !n.goingUp      // true = bottom outer, false = top
+                }
+                groupIds[GroupKey(horizontalOuter: horizontalOuter, positive: positive), default: []].append(i)
+            }
+            var slotOf: [Int: Int] = [:]
+            for (_, group) in groupIds {
+                // Sort by src.y for vertical-exit edges, src.x for horizontal-
+                // exit edges. Ports closer to the outer channel edge take
+                // the innermost lane.
+                let sorted = group.sorted { a, b in
+                    let ra = routes[needs[a].edgeIndex][0]
+                    let rb = routes[needs[b].edgeIndex][0]
+                    return ra.y != rb.y ? ra.y < rb.y : ra.x < rb.x
+                }
+                for (slot, i) in sorted.enumerated() { slotOf[i] = slot }
+            }
+
+            for (i, need) in needs.enumerated() {
+                let slot = slotOf[i] ?? 0
+                let offset = Double(slot) * config.laneSpread
+                let leftX  = bx0 - config.detourClearance - offset
+                let rightX = bx1 + config.detourClearance + offset
+                let topY   = by0 - config.detourClearance - offset
+                let bottomY = by1 + config.detourClearance + offset
+                let route = routes[need.edgeIndex]
+                routes[need.edgeIndex] = detourPolyline(
+                    src: route[0], dst: route[route.count - 1],
+                    srcSide: need.srcSide,
+                    detourX: need.goingLeft ? leftX : rightX,
+                    detourY: need.goingUp   ? topY  : bottomY,
+                    stub: config.detourStub
+                )
             }
         }
 
@@ -183,17 +239,9 @@ public enum OrthogonalRouter {
     private static func detourPolyline(
         src: DiagramScene.Point, dst: DiagramScene.Point,
         srcSide: Side,
-        bx0: Double, bx1: Double, by0: Double, by1: Double,
-        clearance: Double, stub: Double
+        detourX: Double, detourY: Double,
+        stub: Double
     ) -> [DiagramScene.Point] {
-        // Detour direction: pick the diagram side that is closer to both
-        // endpoints so the arc is as short as possible.
-        let midX = (src.x + dst.x) / 2
-        let midY = (src.y + dst.y) / 2
-        let leftSide = midX - bx0 < bx1 - midX
-        let detourX = leftSide ? bx0 - clearance : bx1 + clearance
-        let upSide  = midY - by0 < by1 - midY
-        let detourY = upSide ? by0 - clearance : by1 + clearance
         switch srcSide {
         case .top:
             // Source exits upward; target enters from below.
