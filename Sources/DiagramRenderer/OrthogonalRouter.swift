@@ -39,32 +39,39 @@ public enum OrthogonalRouter {
         // Assign each edge a source face + target face.
         var faces: [Face] = edges.map(Face.init(edge:))
 
-        // Group by source face key (rect + which side) — these are the
-        // edges we need to fan out. Same for target.
-        var sourceGroups: [FaceKey: [Int]] = [:]
-        var targetGroups: [FaceKey: [Int]] = [:]
+        // A single face (rect + side) can hold both outgoing and incoming
+        // ports at once — e.g. `threads` sends an FK up to `users` from
+        // its top edge AND receives one from `thread_posts` on the same
+        // top edge. If we assign source and target ports on that face in
+        // separate passes, each pass sees only its own port and puts it
+        // at the geometric centre → both ports overlap exactly.
+        //
+        // Instead: collect every port (source + target) that lands on a
+        // given face into ONE list, sort by the position of the OTHER
+        // endpoint, and distribute all of them across the face together.
+        struct PortEntry {
+            var edgeIndex: Int
+            var isSource: Bool
+            var projected: Double
+        }
+        var facePorts: [FaceKey: [PortEntry]] = [:]
         for (i, f) in faces.enumerated() {
-            sourceGroups[f.srcKey, default: []].append(i)
-            targetGroups[f.dstKey, default: []].append(i)
+            facePorts[f.srcKey, default: []].append(
+                PortEntry(edgeIndex: i, isSource: true,  projected: f.dstProjected)
+            )
+            facePorts[f.dstKey, default: []].append(
+                PortEntry(edgeIndex: i, isSource: false, projected: f.srcProjected)
+            )
         }
 
-        // Source port assignment: sort by opposite-endpoint coordinate
-        // (target midX for vertical faces, target midY for horizontal),
-        // then distribute along the source face with an inset.
         var sourceSlots: [Int: (slot: Int, count: Int)] = [:]
-        for (_, ids) in sourceGroups {
-            let sorted = ids.sorted { a, b in faces[a].dstProjected < faces[b].dstProjected }
-            for (s, id) in sorted.enumerated() {
-                sourceSlots[id] = (s, sorted.count)
-            }
-        }
-
-        // Target port assignment: mirror image.
         var targetSlots: [Int: (slot: Int, count: Int)] = [:]
-        for (_, ids) in targetGroups {
-            let sorted = ids.sorted { a, b in faces[a].srcProjected < faces[b].srcProjected }
-            for (s, id) in sorted.enumerated() {
-                targetSlots[id] = (s, sorted.count)
+        for (_, entries) in facePorts {
+            let sorted = entries.sorted { $0.projected < $1.projected }
+            for (slot, entry) in sorted.enumerated() {
+                let info = (slot, sorted.count)
+                if entry.isSource { sourceSlots[entry.edgeIndex] = info }
+                else              { targetSlots[entry.edgeIndex] = info }
             }
         }
 
