@@ -174,13 +174,19 @@ public enum OrthogonalRouter {
                 let rightX = bx1 + config.detourClearance + offset
                 let topY   = by0 - config.detourClearance - offset
                 let bottomY = by1 + config.detourClearance + offset
+                // Also stagger the near-target and near-source stub lengths
+                // by the same lane offset, so the RETURN horizontal (or
+                // vertical) segment near the target rides its own lane
+                // instead of stacking on top of every other detour that
+                // ends on the same face.
+                let stub = config.detourStub + offset
                 let route = routes[need.edgeIndex]
                 routes[need.edgeIndex] = detourPolyline(
                     src: route[0], dst: route[route.count - 1],
                     srcSide: need.srcSide,
                     detourX: need.goingLeft ? leftX : rightX,
                     detourY: need.goingUp   ? topY  : bottomY,
-                    stub: config.detourStub
+                    stub: stub
                 )
             }
         }
