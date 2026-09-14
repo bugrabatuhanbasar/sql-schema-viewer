@@ -148,6 +148,11 @@ public enum LayoutEngine {
         for (li, ids) in perLayerIds.enumerated() {
             for id in ids { idToLayer[id] = li }
         }
+        // Count only *adjacent-layer* FK edges for the gap sizing. Long-
+        // span edges (that skip layers) get detour routing outside the
+        // diagram — counting them here would double-charge the gap AND
+        // send the total diagram height into the tens of thousands of
+        // points on 120+ table schemas.
         var edgesAcrossGap: [Int: Int] = [:]
         for (_, table) in schema.tables {
             guard let srcLayer = idToLayer[table.name] else { continue }
@@ -155,8 +160,7 @@ public enum LayoutEngine {
                 guard let dstLayer = idToLayer[fk.referencedTable] else { continue }
                 let lo = min(srcLayer, dstLayer)
                 let hi = max(srcLayer, dstLayer)
-                if lo == hi { continue }
-                for g in lo..<hi { edgesAcrossGap[g, default: 0] += 1 }
+                if hi - lo == 1 { edgesAcrossGap[lo, default: 0] += 1 }
             }
         }
 
@@ -191,7 +195,10 @@ public enum LayoutEngine {
             // Move down to the next layer.
             if li < perLayerIds.count - 1 {
                 let crossing = edgesAcrossGap[li] ?? 0
-                let dynamicGap = baseVerticalGap + Double(crossing) * laneStep
+                // Cap the dynamic component so a single dense transition
+                // can't blow the diagram up to tens of thousands of pt.
+                let dynamicExtra = min(Double(crossing) * laneStep, 480)
+                let dynamicGap = baseVerticalGap + dynamicExtra
                 y += rowHeightMax + dynamicGap
             } else {
                 y += rowHeightMax
