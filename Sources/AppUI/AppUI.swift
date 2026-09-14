@@ -12,6 +12,10 @@ public struct SchemaViewerRootView: SwiftUI.View {
     @State private var selectedObjects: Set<Identifier> = []
     @State private var searchText: String = ""
     @State private var showOrphansOnly: Bool = false
+    /// Preserved across document sessions via UserDefaults so the app
+    /// remembers whether the user prefers curved or orthogonal edges.
+    @AppStorage("com.macsqlschemaviewer.edgeRouting")
+    private var edgeRoutingRaw: String = EdgeRouting.orthogonal.rawValue
 
     public init(document: SchemaDocument) {
         self.document = document
@@ -66,6 +70,15 @@ public struct SchemaViewerRootView: SwiftUI.View {
                     }
                 }
                 .pickerStyle(.menu)
+                Picker("Edge routing", selection: Binding(
+                    get: { currentRouting },
+                    set: { edgeRoutingRaw = $0.rawValue }
+                )) {
+                    Text("Curved").tag(EdgeRouting.curved)
+                    Text("Orthogonal").tag(EdgeRouting.orthogonal)
+                }
+                .pickerStyle(.segmented)
+                .help("Edge routing style — curved bezier vs. right-angle ERD-style")
                 Button {
                     selectedObjects = Set(document.schema.tables.keys)
                 } label: { Label("Select All Tables", systemImage: "square.stack.3d.up") }
@@ -87,9 +100,17 @@ public struct SchemaViewerRootView: SwiftUI.View {
         })
     }
 
+    private var currentRouting: EdgeRouting {
+        EdgeRouting(rawValue: edgeRoutingRaw) ?? .orthogonal
+    }
+
     private var scene: DiagramScene {
         let layout = SchemaKit.layout(document.schema)
-        return DiagramRenderer.buildScene(document.schema, layout: layout)
+        return DiagramRenderer.buildScene(
+            document.schema,
+            layout: layout,
+            routing: currentRouting
+        )
     }
 
     /// The full "related" set for the selection: every selected table + all

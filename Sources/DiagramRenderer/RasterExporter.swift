@@ -70,23 +70,27 @@ public enum RasterExporter {
         let bx0 = scene.nodes.map(\.rect.x).min() ?? 0
         let bx1 = scene.nodes.map { $0.rect.x + $0.rect.width }.max() ?? 0
         for edge in scene.edges {
-            let a = edge.fromRect.borderPoint(toward: (edge.toRect.midX, edge.toRect.midY))
-            let b = edge.toRect.borderPoint(toward: (edge.fromRect.midX, edge.fromRect.midY))
-            let p1 = CGPoint(x: a.x, y: a.y)
-            let p2 = CGPoint(x: b.x, y: b.y)
-            let c1x: CGFloat, c2x: CGFloat
-            if edge.isLongSpan {
-                let bothLeft = (p1.x + p2.x) / 2 < (bx0 + bx1) / 2
-                let dx: CGFloat = bothLeft ? bx0 - 60 : bx1 + 60
-                c1x = dx; c2x = dx
+            if !edge.waypoints.isEmpty {
+                strokeRoundedPolyline(edge.waypoints, radius: 8, in: ctx)
             } else {
-                let m = (p1.x + p2.x) / 2
-                c1x = m; c2x = m
+                let a = edge.fromRect.borderPoint(toward: (edge.toRect.midX, edge.toRect.midY))
+                let b = edge.toRect.borderPoint(toward: (edge.fromRect.midX, edge.fromRect.midY))
+                let p1 = CGPoint(x: a.x, y: a.y)
+                let p2 = CGPoint(x: b.x, y: b.y)
+                let c1x: CGFloat, c2x: CGFloat
+                if edge.isLongSpan {
+                    let bothLeft = (p1.x + p2.x) / 2 < (bx0 + bx1) / 2
+                    let dx: CGFloat = bothLeft ? bx0 - 60 : bx1 + 60
+                    c1x = dx; c2x = dx
+                } else {
+                    let m = (p1.x + p2.x) / 2
+                    c1x = m; c2x = m
+                }
+                ctx.beginPath()
+                ctx.move(to: p1)
+                ctx.addCurve(to: p2, control1: CGPoint(x: c1x, y: p1.y), control2: CGPoint(x: c2x, y: p2.y))
+                ctx.strokePath()
             }
-            ctx.beginPath()
-            ctx.move(to: p1)
-            ctx.addCurve(to: p2, control1: CGPoint(x: c1x, y: p1.y), control2: CGPoint(x: c2x, y: p2.y))
-            ctx.strokePath()
         }
 
         for n in scene.nodes {
@@ -116,6 +120,33 @@ public enum RasterExporter {
                 y += 16
             }
         }
+    }
+
+    private static func strokeRoundedPolyline(_ pts: [DiagramScene.Point], radius: CGFloat, in ctx: CGContext) {
+        guard pts.count >= 2 else { return }
+        ctx.beginPath()
+        ctx.move(to: CGPoint(x: pts[0].x, y: pts[0].y))
+        for i in 1..<(pts.count - 1) {
+            let prev = pts[i - 1], curr = pts[i], next = pts[i + 1]
+            let dxIn  = CGFloat(curr.x - prev.x), dyIn  = CGFloat(curr.y - prev.y)
+            let dxOut = CGFloat(next.x - curr.x), dyOut = CGFloat(next.y - curr.y)
+            let lenIn  = max(0.0001, hypot(dxIn, dyIn))
+            let lenOut = max(0.0001, hypot(dxOut, dyOut))
+            let r = min(radius, lenIn / 2, lenOut / 2)
+            let entry = CGPoint(
+                x: CGFloat(curr.x) - dxIn / lenIn * r,
+                y: CGFloat(curr.y) - dyIn / lenIn * r
+            )
+            let exit = CGPoint(
+                x: CGFloat(curr.x) + dxOut / lenOut * r,
+                y: CGFloat(curr.y) + dyOut / lenOut * r
+            )
+            ctx.addLine(to: entry)
+            ctx.addQuadCurve(to: exit, control: CGPoint(x: curr.x, y: curr.y))
+        }
+        let last = pts[pts.count - 1]
+        ctx.addLine(to: CGPoint(x: last.x, y: last.y))
+        ctx.strokePath()
     }
 
     private static func drawText(_ text: String, at point: CGPoint, fontSize: CGFloat, bold: Bool = false, monospace: Bool = false, in ctx: CGContext) {

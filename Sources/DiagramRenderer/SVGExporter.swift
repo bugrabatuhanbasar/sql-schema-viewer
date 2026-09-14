@@ -23,22 +23,42 @@ public enum SVGExporter {
         let bx0 = scene.nodes.map(\.rect.x).min() ?? 0
         let bx1 = scene.nodes.map { $0.rect.x + $0.rect.width }.max() ?? 0
         for edge in scene.edges {
-            let p1 = edge.fromRect.borderPoint(toward: (edge.toRect.midX, edge.toRect.midY))
-            let p2 = edge.toRect.borderPoint(toward: (edge.fromRect.midX, edge.fromRect.midY))
-            let c1x: Double, c2x: Double
-            if edge.isLongSpan {
-                let bothLeft = (p1.x + p2.x) / 2 < (bx0 + bx1) / 2
-                let dx: Double = bothLeft ? bx0 - 60 : bx1 + 60
-                c1x = dx; c2x = dx
+            let firstPoint: (x: Double, y: Double)
+            let lastPoint: (x: Double, y: Double)
+            let firstDir: (x: Double, y: Double)
+            let lastDir: (x: Double, y: Double)
+            if !edge.waypoints.isEmpty {
+                let pts = edge.waypoints
+                let d = roundedPolylinePathData(points: pts, radius: 8)
+                out.append(#"<path d="\#(d)" fill="none" stroke="\#(style.edgeColor)" stroke-width="1.3"/>"#)
+                firstPoint = (pts[0].x, pts[0].y)
+                lastPoint  = (pts[pts.count - 1].x, pts[pts.count - 1].y)
+                firstDir = unit(from: pts[0], to: pts[1])
+                lastDir  = unit(from: pts[pts.count - 2], to: pts[pts.count - 1])
             } else {
-                let m = (p1.x + p2.x) / 2
-                c1x = m; c2x = m
+                let p1 = edge.fromRect.borderPoint(toward: (edge.toRect.midX, edge.toRect.midY))
+                let p2 = edge.toRect.borderPoint(toward: (edge.fromRect.midX, edge.fromRect.midY))
+                let c1x: Double, c2x: Double
+                if edge.isLongSpan {
+                    let bothLeft = (p1.x + p2.x) / 2 < (bx0 + bx1) / 2
+                    let dx: Double = bothLeft ? bx0 - 60 : bx1 + 60
+                    c1x = dx; c2x = dx
+                } else {
+                    let m = (p1.x + p2.x) / 2
+                    c1x = m; c2x = m
+                }
+                let path = "M \(p1.x) \(p1.y) C \(c1x) \(p1.y) \(c2x) \(p2.y) \(p2.x) \(p2.y)"
+                out.append(#"<path d="\#(path)" fill="none" stroke="\#(style.edgeColor)" stroke-width="1.3"/>"#)
+                firstPoint = p1; lastPoint = p2
+                let (dx, dy) = (p2.x - p1.x, p2.y - p1.y)
+                let len = max(1, (dx * dx + dy * dy).squareRoot())
+                firstDir = (dx / len, dy / len); lastDir = firstDir
             }
-            let path = "M \(p1.x) \(p1.y) C \(c1x) \(p1.y) \(c2x) \(p2.y) \(p2.x) \(p2.y)"
-            out.append(#"<path d="\#(path)" fill="none" stroke="\#(style.edgeColor)" stroke-width="1.3"/>"#)
 
-            let (fx, fy) = labelPoint(near: p1, opposite: p2, offset: 18)
-            let (tx, ty) = labelPoint(near: p2, opposite: p1, offset: 18)
+            let fx = firstPoint.x + firstDir.x * 18
+            let fy = firstPoint.y + firstDir.y * 18
+            let tx = lastPoint.x  - lastDir.x  * 18
+            let ty = lastPoint.y  - lastDir.y  * 18
             out.append(pillLabel(edge.fromCardinality, x: fx, y: fy, style: style))
             out.append(pillLabel(edge.toCardinality,   x: tx, y: ty, style: style))
         }
@@ -63,6 +83,36 @@ public enum SVGExporter {
         let dx = q.x - p.x, dy = q.y - p.y
         let len = max(1, (dx * dx + dy * dy).squareRoot())
         return (p.x + dx / len * offset, p.y + dy / len * offset)
+    }
+
+    private static func unit(from a: DiagramScene.Point, to b: DiagramScene.Point) -> (x: Double, y: Double) {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let len = max(0.0001, (dx * dx + dy * dy).squareRoot())
+        return (dx / len, dy / len)
+    }
+
+    /// SVG `d` attribute for a rounded-corner polyline. Corners are
+    /// smoothed with quadratic bezier arcs (control point at the sharp
+    /// vertex), matching what the on-screen canvas draws.
+    private static func roundedPolylinePathData(points pts: [DiagramScene.Point], radius: Double) -> String {
+        guard pts.count >= 2 else { return "" }
+        var d = "M \(pts[0].x) \(pts[0].y)"
+        for i in 1..<(pts.count - 1) {
+            let prev = pts[i - 1], curr = pts[i], next = pts[i + 1]
+            let dxIn = curr.x - prev.x, dyIn = curr.y - prev.y
+            let dxOut = next.x - curr.x, dyOut = next.y - curr.y
+            let lenIn = max(0.0001, (dxIn * dxIn + dyIn * dyIn).squareRoot())
+            let lenOut = max(0.0001, (dxOut * dxOut + dyOut * dyOut).squareRoot())
+            let r = min(radius, lenIn / 2, lenOut / 2)
+            let ex = curr.x - dxIn / lenIn * r
+            let ey = curr.y - dyIn / lenIn * r
+            let xx = curr.x + dxOut / lenOut * r
+            let xy = curr.y + dyOut / lenOut * r
+            d += " L \(ex) \(ey) Q \(curr.x) \(curr.y) \(xx) \(xy)"
+        }
+        let last = pts[pts.count - 1]
+        d += " L \(last.x) \(last.y)"
+        return d
     }
 
     private static func pillLabel(_ text: String, x: Double, y: Double, style: Style) -> String {

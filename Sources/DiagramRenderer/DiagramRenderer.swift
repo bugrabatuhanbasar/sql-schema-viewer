@@ -14,6 +14,10 @@ public struct DiagramScene: Sendable {
         public var midX: Double { x + width / 2 }
         public var midY: Double { y + height / 2 }
     }
+    public struct Point: Sendable, Equatable {
+        public var x, y: Double
+        public init(x: Double, y: Double) { self.x = x; self.y = y }
+    }
     public struct NodeShape: Sendable {
         public var rect: Rect
         public var title: String
@@ -22,11 +26,10 @@ public struct DiagramScene: Sendable {
             self.rect = rect; self.title = title; self.lines = lines
         }
     }
-    /// A directed edge between two nodes. Rects are carried directly so
-    /// renderers can compute clean rect-boundary intersections (no more
-    /// lines vanishing into the node body). Cardinality strings sit at each
-    /// end. `fromTitle`/`toTitle` name the involved nodes so a live-drag
-    /// canvas can rewire the edge to the current node position.
+    /// A directed edge between two nodes. Two coexisting routing shapes:
+    /// the source/target rects (for renderers that compute bezier
+    /// bindings live) and an optional `waypoints` polyline (populated when
+    /// orthogonal routing was chosen at scene-build time).
     public struct EdgeShape: Sendable {
         public var fromTitle: String
         public var toTitle: String
@@ -36,32 +39,55 @@ public struct DiagramScene: Sendable {
         public var toCardinality: String
         /// True when the straight line between source and target passes
         /// through another node's bounding box — renderers detour long
-        /// edges around the diagram so they don't slice through unrelated
-        /// tables.
+        /// curved edges around the diagram so they don't slice through
+        /// unrelated tables.
         public var isLongSpan: Bool
+        /// Right-angle polyline from source port to target port through
+        /// zero or more channel bends. Empty for curved-mode scenes;
+        /// renderers with an orthogonal mode use this instead of a bezier.
+        public var waypoints: [Point]
         public init(
             fromTitle: String, toTitle: String,
             fromRect: Rect, toRect: Rect,
             fromCardinality: String = "N",
             toCardinality: String = "1",
-            isLongSpan: Bool = false
+            isLongSpan: Bool = false,
+            waypoints: [Point] = []
         ) {
             self.fromTitle = fromTitle; self.toTitle = toTitle
             self.fromRect = fromRect; self.toRect = toRect
             self.fromCardinality = fromCardinality
             self.toCardinality = toCardinality
             self.isLongSpan = isLongSpan
+            self.waypoints = waypoints
         }
     }
     public var nodes: [NodeShape]
     public var edges: [EdgeShape]
-    public init(nodes: [NodeShape] = [], edges: [EdgeShape] = []) {
-        self.nodes = nodes; self.edges = edges
+    public var routing: EdgeRouting
+    public init(nodes: [NodeShape] = [], edges: [EdgeShape] = [], routing: EdgeRouting = .curved) {
+        self.nodes = nodes; self.edges = edges; self.routing = routing
     }
 }
 
+/// Two available connection styles.
+///
+/// - `curved`: cubic bezier from border to border, arcing around long-span
+///    obstacles. Compact, organic-looking.
+/// - `orthogonal`: right-angle segments with rounded corners routed
+///    through inter-layer channels. Reads like a professional ERD tool
+///    (dbdiagram.io, drawSQL, DBeaver ER view).
+public enum EdgeRouting: String, Sendable, Codable, CaseIterable {
+    case curved
+    case orthogonal
+}
+
 public enum DiagramRenderer {
-    public static func buildScene(_ schema: Schema, layout: LayoutResult) -> DiagramScene {
+    public static func buildScene(
+        _ schema: Schema,
+        layout: LayoutResult,
+        routing: EdgeRouting = .curved
+    ) -> DiagramScene {
         var nodes: [DiagramScene.NodeShape] = []
         var rectByName: [Identifier: DiagramScene.Rect] = [:]
         for p in layout.positions {
@@ -93,7 +119,13 @@ public enum DiagramRenderer {
                 ))
             }
         }
-        return DiagramScene(nodes: nodes, edges: edges)
+        if routing == .orthogonal {
+            let routes = OrthogonalRouter.route(edges: edges)
+            for (i, route) in routes.enumerated() where i < edges.count {
+                edges[i].waypoints = route
+            }
+        }
+        return DiagramScene(nodes: nodes, edges: edges, routing: routing)
     }
 
     /// Returns true when the straight segment from the source rect center

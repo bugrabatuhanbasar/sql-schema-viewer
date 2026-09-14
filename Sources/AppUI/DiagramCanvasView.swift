@@ -119,6 +119,36 @@ final class DiagramCanvasNSView: NSView {
         return CGPoint(x: cx + dx * s, y: cy + dy * s)
     }
 
+    /// Live orthogonal waypoints for the given edge. Static waypoints are
+    /// baked at scene-build time in the un-dragged coordinate space; here
+    /// we re-shift the endpoints (and their immediate stubs) to follow the
+    /// current node offsets so an orthogonal edge stays glued to its
+    /// source and target while the user drags either one.
+    private func liveOrthogonalPath(for edge: DiagramScene.EdgeShape) -> [CGPoint]? {
+        guard !edge.waypoints.isEmpty,
+              let fromRect = liveRect(forTitle: edge.fromTitle),
+              let toRect = liveRect(forTitle: edge.toTitle) else { return nil }
+        // The baked path was computed on the un-offset source/target rects.
+        // Translate its first two vertices by the source drag offset and
+        // last two vertices by the target drag offset. The middle vertices
+        // sit in the channel and stay in place — matching how professional
+        // ERD tools behave (only the leg attached to a moving node moves).
+        let fromDX = fromRect.midX - CGFloat(edge.fromRect.midX)
+        let fromDY = fromRect.midY - CGFloat(edge.fromRect.midY)
+        let toDX = toRect.midX - CGFloat(edge.toRect.midX)
+        let toDY = toRect.midY - CGFloat(edge.toRect.midY)
+        var pts: [CGPoint] = []
+        for (i, wp) in edge.waypoints.enumerated() {
+            let isSourceLeg = i < 2
+            let isTargetLeg = i >= edge.waypoints.count - 2
+            let dx: CGFloat = isSourceLeg ? fromDX : (isTargetLeg ? toDX : 0)
+            let dy: CGFloat = isSourceLeg ? fromDY : (isTargetLeg ? toDY : 0)
+            pts.append(CGPoint(x: CGFloat(wp.x) + dx + contentPadding,
+                               y: CGFloat(wp.y) + dy + contentPadding))
+        }
+        return pts
+    }
+
     /// Compute the four control points for an edge's cubic bezier given the
     /// current live rects and the same detour logic as drawing. Returns
     /// nil if either endpoint's rect can't be found.
@@ -159,26 +189,73 @@ final class DiagramCanvasNSView: NSView {
     }
 
     /// Nearest edge under a point, or nil if none is within `tolerance` px.
+    /// Handles both routing modes: for orthogonal edges we sample every
+    /// polyline segment; for curved edges we sample the bezier.
     private func edgeAt(_ point: NSPoint, tolerance: CGFloat = 7) -> Int? {
         let bounds = currentDiagramBounds()
         var best: (index: Int, dist: CGFloat)? = nil
         for (idx, edge) in scene.edges.enumerated() {
-            guard let g = bezier(for: edge, diagramBounds: bounds) else { continue }
             var minD: CGFloat = .infinity
-            // Sample the bezier at 32 segments and take the nearest point.
-            let steps = 32
-            for k in 0...steps {
-                let t = CGFloat(k) / CGFloat(steps)
-                let p = Self.evalBezier(g, at: t)
-                let dx = point.x - p.x, dy = point.y - p.y
-                let d = sqrt(dx * dx + dy * dy)
-                if d < minD { minD = d }
+            if let poly = liveOrthogonalPath(for: edge) {
+                for i in 0..<(poly.count - 1) {
+                    let d = distanceFromPoint(point, toSegmentFrom: poly[i], to: poly[i + 1])
+                    if d < minD { minD = d }
+                }
+            } else if let g = bezier(for: edge, diagramBounds: bounds) {
+                let steps = 32
+                for k in 0...steps {
+                    let t = CGFloat(k) / CGFloat(steps)
+                    let p = Self.evalBezier(g, at: t)
+                    let dx = point.x - p.x, dy = point.y - p.y
+                    let d = sqrt(dx * dx + dy * dy)
+                    if d < minD { minD = d }
+                }
             }
             if minD <= tolerance {
                 if best == nil || minD < best!.dist { best = (idx, minD) }
             }
         }
         return best?.index
+    }
+
+    private func strokeRoundedPolyline(_ pts: [CGPoint], radius: CGFloat, in ctx: CGContext) {
+        guard pts.count >= 2 else { return }
+        ctx.beginPath()
+        ctx.move(to: pts[0])
+        for i in 1..<(pts.count - 1) {
+            let prev = pts[i - 1], curr = pts[i], next = pts[i + 1]
+            let dxIn  = curr.x - prev.x, dyIn  = curr.y - prev.y
+            let dxOut = next.x - curr.x, dyOut = next.y - curr.y
+            let lenIn  = max(0.0001, hypot(dxIn, dyIn))
+            let lenOut = max(0.0001, hypot(dxOut, dyOut))
+            let r = min(radius, lenIn / 2, lenOut / 2)
+            let entry = CGPoint(
+                x: curr.x - dxIn / lenIn * r,
+                y: curr.y - dyIn / lenIn * r
+            )
+            let exit = CGPoint(
+                x: curr.x + dxOut / lenOut * r,
+                y: curr.y + dyOut / lenOut * r
+            )
+            ctx.addLine(to: entry)
+            ctx.addQuadCurve(to: exit, control: curr)
+        }
+        ctx.addLine(to: pts[pts.count - 1])
+        ctx.strokePath()
+    }
+
+    private func normalize(from a: CGPoint, to b: CGPoint) -> CGVector {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let len = max(0.0001, hypot(dx, dy))
+        return CGVector(dx: dx / len, dy: dy / len)
+    }
+
+    private func distanceFromPoint(_ p: CGPoint, toSegmentFrom a: CGPoint, to b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let len2 = dx * dx + dy * dy
+        if len2 == 0 { return hypot(p.x - a.x, p.y - a.y) }
+        let t = max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2))
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -198,34 +275,52 @@ final class DiagramCanvasNSView: NSView {
         let accent = CGColor(red: 0.20, green: 0.55, blue: 0.95, alpha: 1)
         let bounds = currentDiagramBounds()
         for (idx, edge) in scene.edges.enumerated() {
-            guard let g = bezier(for: edge, diagramBounds: bounds) else { continue }
             let isSelected = (selectedEdgeIndex == idx)
-            if isSelected {
-                // Halo behind the accent stroke so the highlight reads on
-                // both light and dark canvases.
-                ctx.setLineWidth(5)
-                ctx.setStrokeColor(accent.copy(alpha: 0.25)!)
-                ctx.beginPath()
-                ctx.move(to: g.a)
-                ctx.addCurve(to: g.b, control1: g.c1, control2: g.c2)
-                ctx.strokePath()
-                ctx.setLineWidth(2.4)
-                ctx.setStrokeColor(accent)
-            } else {
-                ctx.setLineWidth(1.3)
-                ctx.setStrokeColor(edgeColor)
-            }
-            ctx.beginPath()
-            ctx.move(to: g.a)
-            ctx.addCurve(to: g.b, control1: g.c1, control2: g.c2)
-            ctx.strokePath()
+            let strokeWidth: CGFloat = isSelected ? 2.4 : 1.3
+            let strokeColor = isSelected ? accent : edgeColor
 
-            // Cardinality label — 18pt OUTSIDE the node border, along the edge.
-            let dx = g.b.x - g.a.x, dy = g.b.y - g.a.y
-            let len = max(1, sqrt(dx * dx + dy * dy))
-            let ux = dx / len, uy = dy / len
-            let fromLabelPoint = CGPoint(x: g.a.x + ux * 18, y: g.a.y + uy * 18)
-            let toLabelPoint = CGPoint(x: g.b.x - ux * 18, y: g.b.y - uy * 18)
+            let firstPoint: CGPoint
+            let lastPoint: CGPoint
+            let entryDir: CGVector
+            let exitDir: CGVector
+
+            if let poly = liveOrthogonalPath(for: edge), poly.count >= 2 {
+                if isSelected {
+                    ctx.setStrokeColor(accent.copy(alpha: 0.25)!)
+                    ctx.setLineWidth(5)
+                    strokeRoundedPolyline(poly, radius: 8, in: ctx)
+                }
+                ctx.setStrokeColor(strokeColor); ctx.setLineWidth(strokeWidth)
+                strokeRoundedPolyline(poly, radius: 8, in: ctx)
+                firstPoint = poly[0]
+                lastPoint  = poly[poly.count - 1]
+                entryDir   = normalize(from: poly[0], to: poly[1])
+                exitDir    = normalize(from: poly[poly.count - 2], to: poly[poly.count - 1])
+            } else if let g = bezier(for: edge, diagramBounds: bounds) {
+                if isSelected {
+                    ctx.setLineWidth(5); ctx.setStrokeColor(accent.copy(alpha: 0.25)!)
+                    ctx.beginPath(); ctx.move(to: g.a); ctx.addCurve(to: g.b, control1: g.c1, control2: g.c2); ctx.strokePath()
+                }
+                ctx.setStrokeColor(strokeColor); ctx.setLineWidth(strokeWidth)
+                ctx.beginPath(); ctx.move(to: g.a); ctx.addCurve(to: g.b, control1: g.c1, control2: g.c2); ctx.strokePath()
+                firstPoint = g.a
+                lastPoint  = g.b
+                let dx = g.b.x - g.a.x, dy = g.b.y - g.a.y
+                let len = max(1, sqrt(dx * dx + dy * dy))
+                entryDir = CGVector(dx: dx / len, dy: dy / len)
+                exitDir  = entryDir
+            } else { continue }
+
+            // Cardinality label — 18pt along the edge direction, from
+            // each endpoint. Works uniformly for bezier and polyline.
+            let fromLabelPoint = CGPoint(
+                x: firstPoint.x + entryDir.dx * 18,
+                y: firstPoint.y + entryDir.dy * 18
+            )
+            let toLabelPoint = CGPoint(
+                x: lastPoint.x - exitDir.dx * 18,
+                y: lastPoint.y - exitDir.dy * 18
+            )
             drawCardinalityLabel(edge.fromCardinality, at: fromLabelPoint, in: ctx, dark: dark)
             drawCardinalityLabel(edge.toCardinality,   at: toLabelPoint,   in: ctx, dark: dark)
         }
