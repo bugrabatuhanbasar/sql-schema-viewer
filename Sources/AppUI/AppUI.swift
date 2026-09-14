@@ -12,6 +12,10 @@ public struct SchemaViewerRootView: SwiftUI.View {
     @State private var selectedObjects: Set<Identifier> = []
     @State private var searchText: String = ""
     @State private var showOrphansOnly: Bool = false
+    /// Bumped every time the user hits "Reset Layout" — the diagram
+    /// canvas watches this counter and snaps its drag offsets back to
+    /// the layout engine's positions on every change.
+    @State private var resetLayoutCounter: Int = 0
     /// Preserved across document sessions via UserDefaults so the app
     /// remembers whether the user prefers curved or orthogonal edges.
     @AppStorage("com.macsqlschemaviewer.edgeRouting")
@@ -50,6 +54,7 @@ public struct SchemaViewerRootView: SwiftUI.View {
                     scene: scene,
                     selection: selectedObjects,
                     highlights: highlights,
+                    resetTrigger: resetLayoutCounter,
                     onSelectionChanged: { selectedObjects = $0 }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -86,6 +91,10 @@ public struct SchemaViewerRootView: SwiftUI.View {
                     selectedObjects.removeAll()
                 } label: { Label("Deselect", systemImage: "xmark.circle") }
                 .disabled(selectedObjects.isEmpty)
+                Button {
+                    resetLayoutCounter &+= 1
+                } label: { Label("Reset Layout", systemImage: "arrow.uturn.backward.circle") }
+                .help("Undo every table drag and snap them back to the layout engine's positions")
                 Button {
                     document.analyze()
                 } label: { Label("Refresh", systemImage: "arrow.clockwise") }

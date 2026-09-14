@@ -633,6 +633,17 @@ final class DiagramCanvasNSView: NSView {
         selectedNodes = Set(scene.nodes.map { Identifier(raw: $0.title) })
         onSelectionChanged(selectedNodes)
     }
+
+    /// Drop every user drag delta so the diagram snaps back to the
+    /// layout engine's original positions. Called from the SwiftUI
+    /// wrapper via the resetTrigger update path.
+    func resetNodeOffsets() {
+        guard !nodeOffsets.isEmpty else { return }
+        nodeOffsets.removeAll()
+        selectedEdgeIndex = nil
+        invalidateIntrinsicContentSize()
+        needsDisplay = true
+    }
 }
 
 /// SwiftUI wrapper hosting the AppKit canvas inside an NSScrollView with
@@ -644,18 +655,29 @@ public struct DiagramCanvasView: NSViewRepresentable {
     public var selection: Set<Identifier>
     public var highlights: Set<Identifier>
     public var onSelectionChanged: (Set<Identifier>) -> Void
+    /// Monotonically-increasing counter — every increment triggers a
+    /// `resetNodeOffsets()` call on the canvas, snapping tables back to
+    /// their layout-engine positions.
+    public var resetTrigger: Int
 
     public init(
         scene: DiagramScene,
         selection: Set<Identifier>,
         highlights: Set<Identifier>,
+        resetTrigger: Int = 0,
         onSelectionChanged: @escaping (Set<Identifier>) -> Void
     ) {
         self.scene = scene
         self.selection = selection
         self.highlights = highlights
+        self.resetTrigger = resetTrigger
         self.onSelectionChanged = onSelectionChanged
     }
+
+    public final class Coordinator {
+        var lastResetTrigger: Int = 0
+    }
+    public func makeCoordinator() -> Coordinator { Coordinator() }
 
     public func makeNSView(context: Context) -> NSScrollView {
         let scroll = CenteringScrollView()
@@ -684,6 +706,10 @@ public struct DiagramCanvasView: NSViewRepresentable {
         canvas.selectedNodes = selection
         canvas.highlightedNodes = highlights
         canvas.onSelectionChanged = onSelectionChanged
+        if resetTrigger != context.coordinator.lastResetTrigger {
+            context.coordinator.lastResetTrigger = resetTrigger
+            canvas.resetNodeOffsets()
+        }
         canvas.frame.size = canvas.intrinsicContentSize
         (scroll as? CenteringScrollView)?.recenterIfNeeded()
     }
