@@ -68,7 +68,9 @@ public enum OrthogonalRouter {
             }
         }
 
-        // Build the polyline for each edge.
+        // Build a tentative polyline for each edge — source-fan slots
+        // give the initial lane bias so children of a hub table start out
+        // on distinct lanes.
         var routes: [[DiagramScene.Point]] = Array(repeating: [], count: edges.count)
         for (idx, f) in faces.enumerated() {
             let srcSlotInfo = sourceSlots[idx] ?? (0, 1)
@@ -86,7 +88,79 @@ public enum OrthogonalRouter {
                 laneSpread: config.laneSpread
             )
         }
+
+        // Global collision resolution: any pair of edges whose mid channels
+        // overlap on the same lane get pushed apart. This catches cases the
+        // per-face fanning misses — e.g. two edges from *different* source
+        // rects that both happen to run their horizontal mid at the same
+        // y between the same pair of layers.
+        resolveChannelCollisions(&routes, laneStep: 10)
+
         return routes
+    }
+
+    /// Look at every route's mid segment (the middle horizontal or vertical
+    /// run of a Z-shape). Sort edges by the coordinate they share, then
+    /// walk through them and, whenever consecutive edges land closer than
+    /// `laneStep` apart AND their orthogonal ranges overlap, bump the
+    /// second one down by `laneStep`. Repeat until stable (bounded by a
+    /// small iteration cap so a pathological schema can't cause a loop).
+    private static func resolveChannelCollisions(
+        _ routes: inout [[DiagramScene.Point]],
+        laneStep: Double
+    ) {
+        struct MidSeg { var index: Int; var isHorizontal: Bool; var lane: Double; var range: (Double, Double) }
+        for _ in 0..<6 {
+            var segs: [MidSeg] = []
+            for (i, r) in routes.enumerated() where r.count == 4 {
+                // r = [src, corner1, corner2, dst]
+                // Horizontal mid: y1==y2, x differs → horizontal run.
+                if abs(r[1].y - r[2].y) < 0.5 && abs(r[1].x - r[2].x) > 0.5 {
+                    segs.append(MidSeg(
+                        index: i, isHorizontal: true,
+                        lane: r[1].y,
+                        range: (min(r[1].x, r[2].x), max(r[1].x, r[2].x))
+                    ))
+                } else if abs(r[1].x - r[2].x) < 0.5 && abs(r[1].y - r[2].y) > 0.5 {
+                    segs.append(MidSeg(
+                        index: i, isHorizontal: false,
+                        lane: r[1].x,
+                        range: (min(r[1].y, r[2].y), max(r[1].y, r[2].y))
+                    ))
+                }
+            }
+            var moved = false
+            // For each axis, sort by lane then walk.
+            for orient in [true, false] {
+                var group = segs.filter { $0.isHorizontal == orient }
+                group.sort { $0.lane < $1.lane }
+                for i in 0..<group.count {
+                    for j in (i + 1)..<group.count {
+                        let a = group[i], b = group[j]
+                        if b.lane - a.lane >= laneStep { break }
+                        // Check range overlap.
+                        let overlap = min(a.range.1, b.range.1) - max(a.range.0, b.range.0)
+                        if overlap > 0 {
+                            // Push b down (or right) by laneStep.
+                            let bump = laneStep - (b.lane - a.lane)
+                            let route = routes[b.index]
+                            var updated = route
+                            if b.isHorizontal {
+                                updated[1] = DiagramScene.Point(x: route[1].x, y: route[1].y + bump)
+                                updated[2] = DiagramScene.Point(x: route[2].x, y: route[2].y + bump)
+                            } else {
+                                updated[1] = DiagramScene.Point(x: route[1].x + bump, y: route[1].y)
+                                updated[2] = DiagramScene.Point(x: route[2].x + bump, y: route[2].y)
+                            }
+                            routes[b.index] = updated
+                            group[j].lane += bump
+                            moved = true
+                        }
+                    }
+                }
+            }
+            if !moved { break }
+        }
     }
 
     // MARK: internals

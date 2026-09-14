@@ -342,30 +342,21 @@ final class DiagramCanvasNSView: NSView {
                 exitDir  = entryDir
             } else { continue }
 
-            // Cardinality labels. In orthogonal (ERD) mode we suppress
-            // the plain "1" pills entirely — FK targets are PKs by
-            // definition, so "1" is redundant noise and stacking seven
-            // of them under a hub table like `users` was the visual
-            // mess in the earlier screenshot. Only the many-side
-            // cardinalities (N / 0..N / 0..1) carry information and
-            // still render. Curved mode keeps the full pair so short
-            // schemas read as classic 1—N.
-            let showFrom = scene.routing == .curved || edge.fromCardinality != "1"
-            let showTo   = scene.routing == .curved || edge.toCardinality   != "1"
-            if showFrom {
-                let fromLabelPoint = CGPoint(
-                    x: firstPoint.x + entryDir.dx * 18,
-                    y: firstPoint.y + entryDir.dy * 18
-                )
-                drawCardinalityLabel(edge.fromCardinality, at: fromLabelPoint, in: ctx, dark: dark)
-            }
-            if showTo {
-                let toLabelPoint = CGPoint(
-                    x: lastPoint.x - exitDir.dx * 18,
-                    y: lastPoint.y - exitDir.dy * 18
-                )
-                drawCardinalityLabel(edge.toCardinality, at: toLabelPoint, in: ctx, dark: dark)
-            }
+            // Cardinality labels on BOTH endpoints — every relationship
+            // side gets its 1 / N / 0..1 / 0..N pill so users can read the
+            // classic 1 — N / N — N / 1 — 1 pattern off the diagram at a
+            // glance. Fanned ports (~40 pt apart on hub tables) leave room
+            // for the small pills to sit without stacking.
+            let fromLabelPoint = CGPoint(
+                x: firstPoint.x + entryDir.dx * 18,
+                y: firstPoint.y + entryDir.dy * 18
+            )
+            let toLabelPoint = CGPoint(
+                x: lastPoint.x - exitDir.dx * 18,
+                y: lastPoint.y - exitDir.dy * 18
+            )
+            drawCardinalityLabel(edge.fromCardinality, at: fromLabelPoint, in: ctx, dark: dark)
+            drawCardinalityLabel(edge.toCardinality,   at: toLabelPoint,   in: ctx, dark: dark)
         }
 
         // Nodes

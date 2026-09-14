@@ -56,18 +56,12 @@ public enum SVGExporter {
                 firstDir = (dx / len, dy / len); lastDir = firstDir
             }
 
-            let showFrom = scene.routing == .curved || edge.fromCardinality != "1"
-            let showTo   = scene.routing == .curved || edge.toCardinality   != "1"
-            if showFrom {
-                let fx = firstPoint.x + firstDir.x * 18
-                let fy = firstPoint.y + firstDir.y * 18
-                out.append(pillLabel(edge.fromCardinality, x: fx, y: fy, style: style))
-            }
-            if showTo {
-                let tx = lastPoint.x - lastDir.x * 18
-                let ty = lastPoint.y - lastDir.y * 18
-                out.append(pillLabel(edge.toCardinality, x: tx, y: ty, style: style))
-            }
+            let fx = firstPoint.x + firstDir.x * 18
+            let fy = firstPoint.y + firstDir.y * 18
+            out.append(pillLabel(edge.fromCardinality, x: fx, y: fy, style: style))
+            let tx = lastPoint.x - lastDir.x * 18
+            let ty = lastPoint.y - lastDir.y * 18
+            out.append(pillLabel(edge.toCardinality, x: tx, y: ty, style: style))
         }
 
         for n in scene.nodes {
