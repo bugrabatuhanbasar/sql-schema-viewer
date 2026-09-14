@@ -90,47 +90,49 @@ public enum OrthogonalRouter {
         }
 
         // Global collision resolution: any pair of edges whose mid channels
-        // overlap on the same lane get pushed apart. This catches cases the
-        // per-face fanning misses — e.g. two edges from *different* source
-        // rects that both happen to run their horizontal mid at the same
-        // y between the same pair of layers.
-        resolveChannelCollisions(&routes, laneStep: 10)
+        // overlap on the same lane get pushed apart.
+        resolveChannelCollisions(&routes, laneStep: 16)
 
         return routes
     }
 
-    /// Look at every route's mid segment (the middle horizontal or vertical
-    /// run of a Z-shape). Sort edges by the coordinate they share, then
-    /// walk through them and, whenever consecutive edges land closer than
-    /// `laneStep` apart AND their orthogonal ranges overlap, bump the
-    /// second one down by `laneStep`. Repeat until stable (bounded by a
-    /// small iteration cap so a pathological schema can't cause a loop).
+    /// Slide mid channels apart when they'd otherwise overlap. Each edge's
+    /// polyline is a 4-point Z-shape: [src, corner1, corner2, dst]. The
+    /// segment from corner1 → corner2 is the mid channel we're allowed to
+    /// slide; the two stubs (src→corner1 and corner2→dst) are anchored to
+    /// their node borders and stay put.
+    ///
+    /// For each iteration we collect every mid segment, sort by lane, walk
+    /// forward, and any two segments whose lanes are closer than `laneStep`
+    /// AND whose orthogonal ranges overlap get separated. Bounded by a
+    /// small iteration cap so a pathological schema can't loop.
     private static func resolveChannelCollisions(
         _ routes: inout [[DiagramScene.Point]],
         laneStep: Double
     ) {
         struct MidSeg { var index: Int; var isHorizontal: Bool; var lane: Double; var range: (Double, Double) }
-        for _ in 0..<6 {
+        for _ in 0..<12 {
             var segs: [MidSeg] = []
             for (i, r) in routes.enumerated() where r.count == 4 {
                 // r = [src, corner1, corner2, dst]
-                // Horizontal mid: y1==y2, x differs → horizontal run.
-                if abs(r[1].y - r[2].y) < 0.5 && abs(r[1].x - r[2].x) > 0.5 {
+                if abs(r[1].y - r[2].y) < 0.5 {
+                    // Horizontal mid (possibly zero-length when the two
+                    // corners share the same x — still worth tracking so
+                    // parallel Z-shapes get pushed apart).
                     segs.append(MidSeg(
                         index: i, isHorizontal: true,
                         lane: r[1].y,
-                        range: (min(r[1].x, r[2].x), max(r[1].x, r[2].x))
+                        range: (min(r[1].x, r[2].x) - 4, max(r[1].x, r[2].x) + 4)
                     ))
-                } else if abs(r[1].x - r[2].x) < 0.5 && abs(r[1].y - r[2].y) > 0.5 {
+                } else if abs(r[1].x - r[2].x) < 0.5 {
                     segs.append(MidSeg(
                         index: i, isHorizontal: false,
                         lane: r[1].x,
-                        range: (min(r[1].y, r[2].y), max(r[1].y, r[2].y))
+                        range: (min(r[1].y, r[2].y) - 4, max(r[1].y, r[2].y) + 4)
                     ))
                 }
             }
             var moved = false
-            // For each axis, sort by lane then walk.
             for orient in [true, false] {
                 var group = segs.filter { $0.isHorizontal == orient }
                 group.sort { $0.lane < $1.lane }
@@ -138,10 +140,8 @@ public enum OrthogonalRouter {
                     for j in (i + 1)..<group.count {
                         let a = group[i], b = group[j]
                         if b.lane - a.lane >= laneStep { break }
-                        // Check range overlap.
                         let overlap = min(a.range.1, b.range.1) - max(a.range.0, b.range.0)
                         if overlap > 0 {
-                            // Push b down (or right) by laneStep.
                             let bump = laneStep - (b.lane - a.lane)
                             let route = routes[b.index]
                             var updated = route
@@ -257,10 +257,11 @@ public enum OrthogonalRouter {
         }
         switch srcSide {
         case .top, .bottom:
-            // Vertical exit → horizontal mid channel.
+            // Vertical exit → horizontal mid channel. Always emit a full
+            // Z-shape (never collapse to a 2-point straight line) so the
+            // global collision pass has a mid segment to slide along.
             let midYRaw = (src.y + dst.y) / 2
             let midY = midYRaw + laneOffset
-            if abs(src.x - dst.x) < 0.5 { return [src, dst] }
             return [
                 src,
                 DiagramScene.Point(x: src.x, y: midY),
@@ -268,10 +269,8 @@ public enum OrthogonalRouter {
                 dst,
             ]
         case .left, .right:
-            // Horizontal exit → vertical mid channel.
             let midXRaw = (src.x + dst.x) / 2
             let midX = midXRaw + laneOffset
-            if abs(src.y - dst.y) < 0.5 { return [src, dst] }
             return [
                 src,
                 DiagramScene.Point(x: midX, y: src.y),
