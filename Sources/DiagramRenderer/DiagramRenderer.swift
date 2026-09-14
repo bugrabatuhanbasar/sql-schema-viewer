@@ -120,7 +120,7 @@ public enum DiagramRenderer {
             }
         }
         if routing == .orthogonal {
-            let routes = OrthogonalRouter.route(edges: edges)
+            let routes = OrthogonalRouter.route(edges: edges, allNodes: nodes)
             for (i, route) in routes.enumerated() where i < edges.count {
                 edges[i].waypoints = route
             }

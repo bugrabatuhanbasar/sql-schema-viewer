@@ -7,6 +7,7 @@ struct CLIOptions {
     var dialect: Dialect?
     var output: String?
     var format: String?
+    var routing: EdgeRouting = .curved
     var positional: [String] = []
 }
 
@@ -25,6 +26,9 @@ func parseOptions(_ args: [String]) -> CLIOptions {
         case "--format", "-f":
             i += 1
             if i < args.count { opts.format = args[i].lowercased() }
+        case "--routing", "-r":
+            i += 1
+            if i < args.count, let r = EdgeRouting(rawValue: args[i].lowercased()) { opts.routing = r }
         default:
             opts.positional.append(a)
         }
@@ -142,13 +146,13 @@ func cmdRender(_ opts: CLIOptions) -> Never {
     let result = loadSchema(path: path, dialect: opts.dialect)
     switch format {
     case "svg":
-        writeOutput(Data(SchemaKit.svg(from: result.value).utf8), to: out)
+        writeOutput(Data(SchemaKit.svg(from: result.value, routing: opts.routing).utf8), to: out)
     #if canImport(AppKit)
     case "png":
-        guard let png = SchemaKit.png(from: result.value) else { die("PNG generation failed", code: 74) }
+        guard let png = SchemaKit.png(from: result.value, routing: opts.routing) else { die("PNG generation failed", code: 74) }
         writeOutput(png, to: out)
     case "pdf":
-        guard let pdf = SchemaKit.pdf(from: result.value) else { die("PDF generation failed", code: 74) }
+        guard let pdf = SchemaKit.pdf(from: result.value, routing: opts.routing) else { die("PDF generation failed", code: 74) }
         writeOutput(pdf, to: out)
     #endif
     default:
@@ -169,14 +173,14 @@ func cmdExport(_ opts: CLIOptions) -> Never {
     case "mermaid":
         writeString(SchemaKit.mermaid(from: result.value), to: opts.output)
     case "svg":
-        writeString(SchemaKit.svg(from: result.value), to: opts.output)
+        writeString(SchemaKit.svg(from: result.value, routing: opts.routing), to: opts.output)
     #if canImport(AppKit)
     case "png":
-        guard let png = SchemaKit.png(from: result.value) else { die("PNG generation failed", code: 74) }
+        guard let png = SchemaKit.png(from: result.value, routing: opts.routing) else { die("PNG generation failed", code: 74) }
         guard let out = opts.output else { die("png requires --output") }
         writeOutput(png, to: out)
     case "pdf":
-        guard let pdf = SchemaKit.pdf(from: result.value) else { die("PDF generation failed", code: 74) }
+        guard let pdf = SchemaKit.pdf(from: result.value, routing: opts.routing) else { die("PDF generation failed", code: 74) }
         guard let out = opts.output else { die("pdf requires --output") }
         writeOutput(pdf, to: out)
     #endif

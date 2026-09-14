@@ -29,11 +29,18 @@ public enum OrthogonalRouter {
         /// How wide the mid-channel lane spread should be (in points)
         /// between the first and last parallel edge sharing a face.
         public var laneSpread: Double = 32
+        /// Extra clearance around the diagram used by long-span detour
+        /// routing so edges arc cleanly outside every node.
+        public var detourClearance: Double = 60
+        /// Short vertical (or horizontal) step off the source/target port
+        /// before the detour turns toward the outer channel.
+        public var detourStub: Double = 24
         public init() {}
     }
 
     public static func route(
         edges: [DiagramScene.EdgeShape],
+        allNodes: [DiagramScene.NodeShape] = [],
         config: Config = Config()
     ) -> [[DiagramScene.Point]] {
         // Assign each edge a source face + target face.
@@ -96,11 +103,147 @@ public enum OrthogonalRouter {
             )
         }
 
+        // Rescue long-span edges: any Z-shape whose mid segment passes
+        // *through* another table (not the endpoints') gets re-routed as
+        // a 6-point detour that arcs cleanly outside the diagram bounds.
+        // Without this the "posts → users" edge from the sample schema
+        // slices horizontally right through `threads` and `audit_events`
+        // because its natural mid_y = (654 + 196) / 2 = 425 sits smack in
+        // the middle of layer 1.
+        if !allNodes.isEmpty {
+            let bx0 = allNodes.map(\.rect.x).min() ?? 0
+            let bx1 = allNodes.map { $0.rect.x + $0.rect.width }.max() ?? 0
+            let by0 = allNodes.map(\.rect.y).min() ?? 0
+            let by1 = allNodes.map { $0.rect.y + $0.rect.height }.max() ?? 0
+            for (idx, route) in routes.enumerated() {
+                let f = faces[idx]
+                if routeCollidesWithNodes(route, allNodes: allNodes, exclude: [f.srcRect, f.dstRect]) {
+                    routes[idx] = detourPolyline(
+                        src: route[0], dst: route[route.count - 1],
+                        srcSide: f.srcSide,
+                        bx0: bx0, bx1: bx1, by0: by0, by1: by1,
+                        clearance: config.detourClearance,
+                        stub: config.detourStub
+                    )
+                }
+            }
+        }
+
         // Global collision resolution: any pair of edges whose mid channels
         // overlap on the same lane get pushed apart.
         resolveChannelCollisions(&routes, laneStep: 22)
 
         return routes
+    }
+
+    /// Does any segment of the polyline clip a non-endpoint node's rect?
+    private static func routeCollidesWithNodes(
+        _ route: [DiagramScene.Point],
+        allNodes: [DiagramScene.NodeShape],
+        exclude: [DiagramScene.Rect]
+    ) -> Bool {
+        for node in allNodes {
+            let r = node.rect
+            let isEndpoint = exclude.contains { rect in
+                abs(rect.x - r.x) < 0.5 && abs(rect.y - r.y) < 0.5
+            }
+            if isEndpoint { continue }
+            for i in 0..<(route.count - 1) {
+                let a = route[i], b = route[i + 1]
+                if segmentIntersectsRect(a: a, b: b, rect: r) { return true }
+            }
+        }
+        return false
+    }
+
+    private static func segmentIntersectsRect(a: DiagramScene.Point, b: DiagramScene.Point, rect: DiagramScene.Rect) -> Bool {
+        // Liang–Barsky, same as DiagramRenderer.
+        let pad = 4.0
+        let xmin = rect.x - pad, xmax = rect.x + rect.width + pad
+        let ymin = rect.y - pad, ymax = rect.y + rect.height + pad
+        var t0 = 0.0, t1 = 1.0
+        let dx = b.x - a.x, dy = b.y - a.y
+        let p = [-dx, dx, -dy, dy]
+        let q = [a.x - xmin, xmax - a.x, a.y - ymin, ymax - a.y]
+        for i in 0..<4 {
+            if p[i] == 0 {
+                if q[i] < 0 { return false }
+            } else {
+                let t = q[i] / p[i]
+                if p[i] < 0 { if t > t1 { return false }; if t > t0 { t0 = t } }
+                else { if t < t0 { return false }; if t < t1 { t1 = t } }
+            }
+        }
+        return true
+    }
+
+    /// 6-point detour polyline: exits the source port, walks a short stub,
+    /// arcs OUTSIDE the diagram on the closer side, drops to target level,
+    /// walks a short stub back, and enters the target port.
+    private static func detourPolyline(
+        src: DiagramScene.Point, dst: DiagramScene.Point,
+        srcSide: Side,
+        bx0: Double, bx1: Double, by0: Double, by1: Double,
+        clearance: Double, stub: Double
+    ) -> [DiagramScene.Point] {
+        // Detour direction: pick the diagram side that is closer to both
+        // endpoints so the arc is as short as possible.
+        let midX = (src.x + dst.x) / 2
+        let midY = (src.y + dst.y) / 2
+        let leftSide = midX - bx0 < bx1 - midX
+        let detourX = leftSide ? bx0 - clearance : bx1 + clearance
+        let upSide  = midY - by0 < by1 - midY
+        let detourY = upSide ? by0 - clearance : by1 + clearance
+        switch srcSide {
+        case .top:
+            // Source exits upward; target enters from below.
+            // Stub goes up; detour turns horizontally at src.y - stub;
+            // vertical arm at detourX; second turn at dst.y + stub;
+            // stub back to target.
+            let srcAway = DiagramScene.Point(x: src.x, y: src.y - stub)
+            let dstAway = DiagramScene.Point(x: dst.x, y: dst.y + stub)
+            return [
+                src,
+                srcAway,
+                DiagramScene.Point(x: detourX, y: srcAway.y),
+                DiagramScene.Point(x: detourX, y: dstAway.y),
+                dstAway,
+                dst,
+            ]
+        case .bottom:
+            let srcAway = DiagramScene.Point(x: src.x, y: src.y + stub)
+            let dstAway = DiagramScene.Point(x: dst.x, y: dst.y - stub)
+            return [
+                src,
+                srcAway,
+                DiagramScene.Point(x: detourX, y: srcAway.y),
+                DiagramScene.Point(x: detourX, y: dstAway.y),
+                dstAway,
+                dst,
+            ]
+        case .left:
+            let srcAway = DiagramScene.Point(x: src.x - stub, y: src.y)
+            let dstAway = DiagramScene.Point(x: dst.x + stub, y: dst.y)
+            return [
+                src,
+                srcAway,
+                DiagramScene.Point(x: srcAway.x, y: detourY),
+                DiagramScene.Point(x: dstAway.x, y: detourY),
+                dstAway,
+                dst,
+            ]
+        case .right:
+            let srcAway = DiagramScene.Point(x: src.x + stub, y: src.y)
+            let dstAway = DiagramScene.Point(x: dst.x - stub, y: dst.y)
+            return [
+                src,
+                srcAway,
+                DiagramScene.Point(x: srcAway.x, y: detourY),
+                DiagramScene.Point(x: dstAway.x, y: detourY),
+                dstAway,
+                dst,
+            ]
+        }
     }
 
     /// Slide mid channels apart when they'd otherwise overlap. Each edge's

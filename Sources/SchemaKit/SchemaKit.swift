@@ -67,20 +67,20 @@ public enum SchemaKit {
         LayoutEngine.layout(schema)
     }
 
-    public static func scene(from schema: Schema) -> DiagramScene {
-        DiagramRenderer.buildScene(schema, layout: LayoutEngine.layout(schema))
+    public static func scene(from schema: Schema, routing: EdgeRouting = .curved) -> DiagramScene {
+        DiagramRenderer.buildScene(schema, layout: LayoutEngine.layout(schema), routing: routing)
     }
 
-    public static func svg(from schema: Schema) -> String {
-        SVGExporter.export(scene(from: schema))
+    public static func svg(from schema: Schema, routing: EdgeRouting = .curved) -> String {
+        SVGExporter.export(scene(from: schema, routing: routing))
     }
 
     #if canImport(AppKit)
-    public static func png(from schema: Schema) -> Data? {
-        RasterExporter.png(scene(from: schema))
+    public static func png(from schema: Schema, routing: EdgeRouting = .curved) -> Data? {
+        RasterExporter.png(scene(from: schema, routing: routing))
     }
-    public static func pdf(from schema: Schema) -> Data? {
-        RasterExporter.pdf(scene(from: schema))
+    public static func pdf(from schema: Schema, routing: EdgeRouting = .curved) -> Data? {
+        RasterExporter.pdf(scene(from: schema, routing: routing))
     }
     #endif
 }
