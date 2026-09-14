@@ -13,12 +13,19 @@ import SwiftUI
 final class DiagramCanvasNSView: NSView {
     var scene: DiagramScene = DiagramScene() {
         didSet {
-            // Reset offsets when the underlying scene actually changes shape.
-            if scene.nodes.count != oldValue.nodes.count {
+            // SwiftUI re-runs updateNSView on every state change and re-
+            // assigns the (same) scene value, so we can only invalidate
+            // node offsets / the edge highlight when the scene actually
+            // changed. Compare by node titles + edge count — cheap and
+            // catches every case that would invalidate an edge index.
+            let shapeChanged =
+                scene.nodes.count != oldValue.nodes.count ||
+                scene.edges.count != oldValue.edges.count ||
+                zip(scene.nodes, oldValue.nodes).contains(where: { $0.title != $1.title })
+            if shapeChanged {
                 nodeOffsets.removeAll()
+                selectedEdgeIndex = nil
             }
-            // Edge indices are only valid within a given scene.
-            selectedEdgeIndex = nil
             invalidateIntrinsicContentSize()
             needsDisplay = true
         }
