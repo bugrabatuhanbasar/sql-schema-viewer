@@ -23,9 +23,16 @@ import SchemaModel
 public enum OrthogonalRouter {
 
     public struct Config: Sendable {
-        public var portInsetFromRectCorner: Double = 24
-        public var stubLength: Double = 22
-        public var channelLaneStep: Double = 12
+        /// How far from a rect's corner the outermost ports sit — smaller
+        /// = ports fan across more of the side, room for more edges.
+        public var portInsetFromRectCorner: Double = 14
+        /// Straight run right off the node border before the polyline bends
+        /// into the channel. Longer stubs = more separation between
+        /// converging edges.
+        public var stubLength: Double = 34
+        /// Vertical (or horizontal) distance between adjacent lanes when
+        /// two edges share a channel bin.
+        public var channelLaneStep: Double = 16
         public init() {}
     }
 
@@ -60,24 +67,26 @@ public enum OrthogonalRouter {
             )
         }
         func distribute(rect: DiagramScene.Rect, side: Side, count: Int, slot: Int) -> DiagramScene.Point {
-            let inset = min(config.portInsetFromRectCorner, min(rect.width, rect.height) / 3)
+            // Fan ports across most of the side, keeping a small inset so
+            // corner rounding doesn't clip the outermost port. With 7+
+            // sibling FKs into a single "hub" table, distributing across
+            // ~85% of the side (rather than the previous ~60%) is what
+            // finally makes the ports readable.
+            let inset = min(config.portInsetFromRectCorner, min(rect.width, rect.height) / 4)
             let usableStart: Double
             let usableEnd: Double
-            let axis: String
             switch side {
             case .top, .bottom:
                 usableStart = rect.x + inset
                 usableEnd = rect.x + rect.width - inset
-                axis = "x"
             case .left, .right:
                 usableStart = rect.y + inset
                 usableEnd = rect.y + rect.height - inset
-                axis = "y"
             }
             let step = count > 1 ? (usableEnd - usableStart) / Double(count - 1) : 0
             let coord = count > 1 ? usableStart + step * Double(slot) : (usableStart + usableEnd) / 2
             switch side {
-            case .top:    _ = axis; return .init(x: coord, y: rect.y)
+            case .top:    return .init(x: coord, y: rect.y)
             case .bottom: return .init(x: coord, y: rect.y + rect.height)
             case .left:   return .init(x: rect.x, y: coord)
             case .right:  return .init(x: rect.x + rect.width, y: coord)

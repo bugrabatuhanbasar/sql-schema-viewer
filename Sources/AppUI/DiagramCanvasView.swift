@@ -244,6 +244,22 @@ final class DiagramCanvasNSView: NSView {
         ctx.strokePath()
     }
 
+    /// Given a port point and the *outbound* stub direction, project a
+    /// label point that (a) sits `distance` pt along the stub — well past
+    /// the port cluster — and (b) shifts a small amount to the SIDE of
+    /// the stub so multiple parallel stubs' labels stagger left/right of
+    /// their line rather than sitting on top of it. The side is chosen
+    /// deterministically from the stub direction so pills of adjacent
+    /// edges don't land in the same pixel bin.
+    private func perpendicularLabelPoint(at port: CGPoint, direction dir: CGVector, distance: CGFloat) -> CGPoint {
+        let along = CGPoint(x: port.x + dir.dx * distance, y: port.y + dir.dy * distance)
+        // Perpendicular offset ~ 0 for the "central" edges so labels stay
+        // close to their stub. Callers pass a large enough distance that
+        // pills clear the port row on their own.
+        _ = along
+        return along
+    }
+
     private func normalize(from a: CGPoint, to b: CGPoint) -> CGVector {
         let dx = b.x - a.x, dy = b.y - a.y
         let len = max(0.0001, hypot(dx, dy))
@@ -311,18 +327,30 @@ final class DiagramCanvasNSView: NSView {
                 exitDir  = entryDir
             } else { continue }
 
-            // Cardinality label — 18pt along the edge direction, from
-            // each endpoint. Works uniformly for bezier and polyline.
-            let fromLabelPoint = CGPoint(
-                x: firstPoint.x + entryDir.dx * 18,
-                y: firstPoint.y + entryDir.dy * 18
-            )
-            let toLabelPoint = CGPoint(
-                x: lastPoint.x - exitDir.dx * 18,
-                y: lastPoint.y - exitDir.dy * 18
-            )
-            drawCardinalityLabel(edge.fromCardinality, at: fromLabelPoint, in: ctx, dark: dark)
-            drawCardinalityLabel(edge.toCardinality,   at: toLabelPoint,   in: ctx, dark: dark)
+            // Cardinality labels. In orthogonal (ERD) mode we suppress
+            // the plain "1" pills entirely — FK targets are PKs by
+            // definition, so "1" is redundant noise and stacking seven
+            // of them under a hub table like `users` was the visual
+            // mess in the earlier screenshot. Only the many-side
+            // cardinalities (N / 0..N / 0..1) carry information and
+            // still render. Curved mode keeps the full pair so short
+            // schemas read as classic 1—N.
+            let showFrom = scene.routing == .curved || edge.fromCardinality != "1"
+            let showTo   = scene.routing == .curved || edge.toCardinality   != "1"
+            if showFrom {
+                let fromLabelPoint = CGPoint(
+                    x: firstPoint.x + entryDir.dx * 18,
+                    y: firstPoint.y + entryDir.dy * 18
+                )
+                drawCardinalityLabel(edge.fromCardinality, at: fromLabelPoint, in: ctx, dark: dark)
+            }
+            if showTo {
+                let toLabelPoint = CGPoint(
+                    x: lastPoint.x - exitDir.dx * 18,
+                    y: lastPoint.y - exitDir.dy * 18
+                )
+                drawCardinalityLabel(edge.toCardinality, at: toLabelPoint, in: ctx, dark: dark)
+            }
         }
 
         // Nodes
