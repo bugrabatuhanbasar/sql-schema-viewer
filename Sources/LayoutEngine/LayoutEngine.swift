@@ -33,8 +33,8 @@ public enum LayoutEngine {
         nodeWidth: Double = 260,
         rowHeight: Double = 18,
         headerHeight: Double = 34,
-        horizontalGap: Double = 90,
-        verticalGap: Double = 80
+        horizontalGap: Double = 110,
+        verticalGap: Double = 140
     ) -> LayoutResult {
         layered(
             schema,
@@ -51,8 +51,8 @@ public enum LayoutEngine {
         nodeWidth: Double = 260,
         rowHeight: Double = 18,
         headerHeight: Double = 34,
-        horizontalGap: Double = 90,
-        verticalGap: Double = 80
+        horizontalGap: Double = 110,
+        verticalGap: Double = 140
     ) -> LayoutResult {
         let names = schema.tables.keys.sorted { $0.normalized < $1.normalized }
         if names.isEmpty { return LayoutResult() }

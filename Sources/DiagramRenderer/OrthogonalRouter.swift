@@ -91,7 +91,7 @@ public enum OrthogonalRouter {
 
         // Global collision resolution: any pair of edges whose mid channels
         // overlap on the same lane get pushed apart.
-        resolveChannelCollisions(&routes, laneStep: 16)
+        resolveChannelCollisions(&routes, laneStep: 22)
 
         return routes
     }
@@ -111,7 +111,7 @@ public enum OrthogonalRouter {
         laneStep: Double
     ) {
         struct MidSeg { var index: Int; var isHorizontal: Bool; var lane: Double; var range: (Double, Double) }
-        for _ in 0..<12 {
+        for _ in 0..<24 {
             var segs: [MidSeg] = []
             for (i, r) in routes.enumerated() where r.count == 4 {
                 // r = [src, corner1, corner2, dst]
@@ -122,13 +122,13 @@ public enum OrthogonalRouter {
                     segs.append(MidSeg(
                         index: i, isHorizontal: true,
                         lane: r[1].y,
-                        range: (min(r[1].x, r[2].x) - 4, max(r[1].x, r[2].x) + 4)
+                        range: (min(r[1].x, r[2].x) - 10, max(r[1].x, r[2].x) + 10)
                     ))
                 } else if abs(r[1].x - r[2].x) < 0.5 {
                     segs.append(MidSeg(
                         index: i, isHorizontal: false,
                         lane: r[1].x,
-                        range: (min(r[1].y, r[2].y) - 4, max(r[1].y, r[2].y) + 4)
+                        range: (min(r[1].y, r[2].y) - 10, max(r[1].y, r[2].y) + 10)
                     ))
                 }
             }
