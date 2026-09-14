@@ -119,33 +119,39 @@ final class DiagramCanvasNSView: NSView {
         return CGPoint(x: cx + dx * s, y: cy + dy * s)
     }
 
-    /// Live orthogonal waypoints for the given edge. Static waypoints are
-    /// baked at scene-build time in the un-dragged coordinate space; here
-    /// we re-shift the endpoints so an orthogonal edge stays glued to its
-    /// source and target while the user drags either one.
+    /// Live orthogonal waypoints for the given edge.
     ///
-    /// Split rule: the first half of the polyline follows the source's
-    /// live rect, the second half follows the target's. This gives a
-    /// clean split for both 4-point Z-shapes (2 source-side, 2 target-side)
-    /// and the 2-point straight lines (1 each).
+    /// The router bakes waypoints in the padding-free layout coordinate
+    /// space at scene-build time. Two things happen here to display them:
+    ///
+    /// 1. A single `contentPadding` translation is applied to every point
+    ///    — same shift the node rects get in `rectFor(_:)`. Previously
+    ///    this padding was added *twice* (once via the fromRect/toRect
+    ///    midpoint delta, once explicitly), so orthogonal edges started
+    ///    life 40 pt away from the tables they were supposed to touch.
+    ///    That was the "not glued to boxes" bug.
+    ///
+    /// 2. Any per-node drag delta from `nodeOffsets` is added to the
+    ///    corresponding half of the polyline. The first half of the
+    ///    polyline (index < count/2) follows the source; the second half
+    ///    follows the target. Middle vertices in a 4-point Z-shape belong
+    ///    to whichever half is closer to them, so an edge stays glued to
+    ///    both endpoints when either is being dragged.
     private func liveOrthogonalPath(for edge: DiagramScene.EdgeShape) -> [CGPoint]? {
-        guard !edge.waypoints.isEmpty,
-              let fromRect = liveRect(forTitle: edge.fromTitle),
-              let toRect = liveRect(forTitle: edge.toTitle) else { return nil }
-        let fromDX = fromRect.midX - CGFloat(edge.fromRect.midX)
-        let fromDY = fromRect.midY - CGFloat(edge.fromRect.midY)
-        let toDX = toRect.midX - CGFloat(edge.toRect.midX)
-        let toDY = toRect.midY - CGFloat(edge.toRect.midY)
+        guard !edge.waypoints.isEmpty else { return nil }
+        let fromDrag = nodeOffsets[edge.fromTitle] ?? .zero
+        let toDrag   = nodeOffsets[edge.toTitle]   ?? .zero
         let n = edge.waypoints.count
         let mid = n / 2
         var pts: [CGPoint] = []
         pts.reserveCapacity(n)
         for (i, wp) in edge.waypoints.enumerated() {
             let source = i < mid
-            let dx = source ? fromDX : toDX
-            let dy = source ? fromDY : toDY
-            pts.append(CGPoint(x: CGFloat(wp.x) + dx + contentPadding,
-                               y: CGFloat(wp.y) + dy + contentPadding))
+            let drag = source ? fromDrag : toDrag
+            pts.append(CGPoint(
+                x: CGFloat(wp.x) + drag.x + contentPadding,
+                y: CGFloat(wp.y) + drag.y + contentPadding
+            ))
         }
         return pts
     }
